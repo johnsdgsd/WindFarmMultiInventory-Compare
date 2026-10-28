@@ -1,0 +1,29 @@
+# T240（20 年）对比配置：同一模型、同一 300 场景池；基线是 377 轮 cuts 的
+# sim_1000paths.npz（LB 112,307.44 / UB 159,380.87 / gap 29.54%）。
+
+[model]
+root = "../风场多仓库备件库存管理案例-python"
+commit = "e61040f"
+problem_data = "results/base_20261024_153043/problem_data.json"
+problem_toml = "results/base_20261024_153043/config/problem.toml"
+solver_toml = "results/base_20261024_153043/config/solver.toml"
+
+[baseline]
+name = "SDDP_T240_377r"
+result_dir = "results/base_20261024_153043"
+npz = "sim_1000paths.npz"
+allow_model_mismatch = false
+
+[evaluation]
+n_paths = 1000
+seed = 2026
+chunk_size = 1000
+tol = 1e-6
+state_tol = 1e-4
+
+[calibration]
+train_seed = 777
+val_seed = 888
+train_paths = 1000
+val_paths = 1000
+chunk_size = 1000

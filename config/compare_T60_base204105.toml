@@ -1,0 +1,32 @@
+# T60 新基线（base_T60_20261026_204105）对比配置。
+# 与旧 T60 基线的差异：problem_data.json 的 n0 是混合初始健康分布（不是全等级 0），
+# 因此 (s,S) 必须在这个新的问题数据上重新标定，不能复用旧 policy。
+# 该目录有 sim_2000paths.npz（较早）和 sim_3000paths.npz（更新后 cuts）；
+# 本配置用最新的 3000 路径 baseline 作为测试集。
+
+[model]
+root = "../风场多仓库备件库存管理案例-python"
+commit = "4ec38f9f1d58f965864233d48fa9e5246d3b339d"
+problem_data = "results/base_T60_20261026_204105/problem_data.json"
+problem_toml = "results/base_T60_20261026_204105/config/problem.toml"
+solver_toml = "results/base_T60_20261026_204105/config/solver.toml"
+
+[baseline]
+name = "SDDP_T60_204105_3000p"
+result_dir = "results/base_T60_20261026_204105"
+npz = "sim_3000paths.npz"
+allow_model_mismatch = false
+
+[evaluation]
+n_paths = 3000
+seed = 2026
+chunk_size = 1000
+tol = 1e-6
+state_tol = 1e-4
+
+[calibration]
+train_seed = 777
+val_seed = 888
+train_paths = 2000
+val_paths = 2000
+chunk_size = 1000

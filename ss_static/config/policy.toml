@@ -1,0 +1,80 @@
+# 非时变 (s,S) 基准参数（docs/s,S.md；mode 0：无主动调拨）。
+# 模型/基线/评估口径在根目录 config/compare.toml；这里放策略、算法与搜索预算。
+
+[policy]
+kind = "ss_static"
+position = "net"                 # docs/s,S.md 的 IP=I+q_in+Σo−W
+passive_transshipment = true     # 本地优先 + 全配对按 tc 升序全局贪心
+cross_cost_rule = "all"          # docs/s,S.md §3：不设成本阈值
+max_passive_cost = 20.0          # 仅 fixed 消融用；all 模式忽略
+active_transfer = false          # mode_tau=0，主基准
+fill = "local_then_priority"
+
+[search]
+# 可选算法：
+# coordinate, random, nelder-mead, powell, differential-evolution,
+# dual-annealing, genetic, simulated-annealing
+# CLI --algo 可覆盖；--algo all 跑全部。
+algorithms = ["coordinate"]
+integer_params = false           # true = 只搜整数 s,S（敏感性；MD 原文为 R）
+seed = 2026                      # 优化器随机种子（训练/验证路径 seed 在 compare.toml）
+q_r = 1.0                        # s0=max(0,S0−Q_r)，MD 允许 1 或 d_r
+starts = ["mean", "one_sigma", "two_z"]
+budget_unique = 0                # >0 时把各算法调到约同一真实评估预算（算法对比用）
+
+[search.coordinate]
+n_grid = 20                      # 每坐标一维网格点数（MD §9）
+max_rounds = 3
+eps = 1e-3                       # ||Δθ||∞ 停止阈值
+eta = 1e-4                       # 相对目标改进停止阈值
+rho_min = 1e-4                   # 半径下限
+
+[search.random]
+n_samples = 1000                 # LHS 采样数
+n_top = 10                       # 保留的候选数
+n_refine = 300                   # 局部高斯扰动次数
+sigma0 = 0.25                    # 初始扰动尺度（Imax 的比例）
+sigma_min = 1e-3
+
+[search.nelder-mead]
+max_evals = 1500                 # 每个起点的最大函数评估
+xatol = 1e-3
+fatol = 1e-3
+
+[search.powell]
+max_evals = 1500
+xtol = 1e-3
+ftol = 1e-4
+
+[search.differential-evolution]
+maxiter = 40
+popsize = 8
+tol = 1e-4
+polish = false
+restarts = 1
+
+[search.dual-annealing]
+maxiter = 300
+maxfun = 3000
+no_local_search = true
+restarts = 1
+
+[search.genetic]
+population = 40
+generations = 40
+crossover_prob = 0.8
+mutation_prob = 0.2
+mutation_sigma = 0.5             # u 空间的绝对标准差
+alpha = 0.5                      # BLX-α
+elite = 2
+max_evals = 4000
+
+[search.simulated-annealing]
+n_iters = 2000                   # 总迭代次数（各链平分）
+T0_frac = 0.05                   # 初始温度 = T0_frac × 初始成本
+alpha = 0.995
+sigma = 0.5                      # u 空间 proposal 标准差
+n_chains = 3
+
+[output]
+tag = "ss_static_T60"

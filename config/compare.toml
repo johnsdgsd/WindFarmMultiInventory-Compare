@@ -1,0 +1,37 @@
+# 对比实验共享配置：三个子项目都读这一份。
+# 改模型参数 / 对比基线只改这里；子项目自己的策略参数在各项目 config/policy.toml。
+#
+# 路径约定：
+#   model.root                         相对本对比实验根目录
+#   problem_data/problem_toml/solver_toml/baseline.result_dir  相对 model.root
+#   baseline.npz                       相对 baseline.result_dir
+#
+# 模型事实源优先用基线结果里的 problem_data.json（含 300 场景池、N、
+# Qmax/Imax、tc_route、成本），避免重新采样导致 scene 索引对不上。
+
+[model]
+root = "../风场多仓库备件库存管理案例-python"
+commit = "e61040f"
+problem_data = "results/base_T60_20261025_131043/problem_data.json"
+problem_toml = "results/base_T60_20261025_131043/config/problem.toml"
+solver_toml = "results/base_T60_20261025_131043/config/solver.toml"
+
+[baseline]
+name = "SDDP_T60_128r"
+result_dir = "results/base_T60_20261025_131043"
+npz = "sim_2000paths.npz"
+allow_model_mismatch = false
+
+[evaluation]
+n_paths = 2000
+seed = 2026
+chunk_size = 1000
+tol = 1e-6
+state_tol = 1e-4
+
+[calibration]
+train_seed = 777
+val_seed = 888
+train_paths = 2000
+val_paths = 2000
+chunk_size = 1000

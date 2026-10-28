@@ -1,0 +1,87 @@
+# 主动调拨变体（mode 1）：每仓门限 h 是优化参数，目标 T=5 固定。
+# 用法：run_calibrate.py --policy-config ss_static/config/policy_active.toml
+# 其余策略选项与 policy.toml 相同；本文件是完整配置，避免归档时配置与 policy 矛盾。
+
+[policy]
+kind = "ss_static"
+position = "net"
+passive_transshipment = true
+cross_cost_rule = "all"
+max_passive_cost = 20.0
+active_transfer = true
+fill = "local_then_priority"
+
+# 主动调拨（ThresholdBalanceRule）
+active_rule = "threshold_balance"
+active_target = 5.0              # 每仓目标库存 T（固定）
+active_threshold_init = 5.0      # 每仓门限 h 的初值；h 本身是优化参数
+active_threshold_min = 5.0       # h 下界 = T；h=Imax 等价于该仓关闭主动调拨
+active_fraction = 1.0            # 每次调拨比例 alpha
+active_stop_offset = 2           # 最后 2 期不主动调拨
+active_priority = "deficit_risk" # 调入仓优先 W_out+E[F_next] 大者
+active_forecast = "pool_mean"    # 300 场景池平均转移矩阵
+
+[search]
+algorithms = ["coordinate"]
+integer_params = false
+seed = 2026
+q_r = 1.0
+starts = ["mean", "one_sigma", "two_z"]
+budget_unique = 0
+
+[search.coordinate]
+n_grid = 20
+max_rounds = 3
+eps = 1e-3
+eta = 1e-4
+rho_min = 1e-4
+
+[search.random]
+n_samples = 1000
+n_top = 10
+n_refine = 300
+sigma0 = 0.25
+sigma_min = 1e-3
+
+[search.nelder-mead]
+max_evals = 1500
+xatol = 1e-3
+fatol = 1e-3
+
+[search.powell]
+max_evals = 1500
+xtol = 1e-3
+ftol = 1e-4
+
+[search.differential-evolution]
+maxiter = 40
+popsize = 8
+tol = 1e-4
+polish = false
+restarts = 1
+
+[search.dual-annealing]
+maxiter = 300
+maxfun = 3000
+no_local_search = true
+restarts = 1
+
+[search.genetic]
+population = 40
+generations = 40
+crossover_prob = 0.8
+mutation_prob = 0.2
+mutation_sigma = 0.5
+alpha = 0.5
+elite = 2
+max_evals = 4000
+
+[search.simulated-annealing]
+n_iters = 2000
+T0_frac = 0.05
+alpha = 0.995
+sigma = 0.5
+n_chains = 3
+
+[output]
+tag = "ss_static_T60_204105_active"

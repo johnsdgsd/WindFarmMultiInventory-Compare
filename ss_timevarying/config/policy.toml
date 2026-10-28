@@ -1,0 +1,22 @@
+# 时间相关 (s,S) 配置草案（未实现，不被当前代码读取）
+[policy]
+kind = "ss_timevarying"
+segments = 12
+position = "net"
+passive_transshipment = true
+cross_cost_rule = "fixed"
+max_passive_cost = 20.0
+active_transfer = false
+fill = "local_then_priority"
+
+[search]
+s_min = -5
+stop_offset_min = 0
+stop_offset_max = 12
+max_passes = 6
+no_improve_passes = 3
+local_window = 2
+seed = 2027
+
+[output]
+tag = "ss_timevarying_T60"
