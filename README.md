@@ -193,11 +193,14 @@ dual-annealing,genetic,simulated-annealing` 或 `all`。其他常用参数：
 - `workers` 是路径级线程并行，`threads` 是 COPT 单模型线程；
   `progress.log`/`run.log` 记录进度；失败 run 也保留 `run.json`/`error.txt`。
 - 真实路径取基线 `scene` 前 M 条，与 SDDP 配对，不是独立 `seed_real`。
-- **正式运行进行中**：T60 新基线、N=10、M=50、seed_opt=2027、COPT，
-  tag `rolling_T60_204105_final`；尚无有效正式结果，旧 `capfix`/测试/smoke
-  运行不作为论文结果。结果目录
-  `results/rolling_horizon/<tag>_<timestamp>/`，数字以
-  `summary.md`/`conclusion.md`/`comparison.json` 为准。详细口径见
+- **正式结果（2026-10-28）**：T60 新基线、N=10、M=50、seed_opt=2027、
+  workers=6、threads=4；tag `rolling_T60_204105_final2`。
+  滚动 39891.1219 vs 同 50 路径基线 35451.4783，配对差 +4439.6437
+  （+12.52%），t=8.40，胜率 8.00%，审计通过；相对全量基线
+  35833.3228 为 +11.32%，低于 active s,S 的 +13.65%。
+  旧 `capfix`/测试/smoke 运行不作为论文结果。结果目录
+  `results/rolling_horizon/rolling_T60_204105_final2_20261028_223241/`，
+  数字以 `summary.md`/`conclusion.md`/`comparison.json` 为准。详细口径见
   `docs/method-rolling-horizon.md`。
 
 ## 评价函数与算法

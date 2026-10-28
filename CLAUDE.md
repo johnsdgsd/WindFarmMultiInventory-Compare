@@ -451,9 +451,13 @@ run `results/ss_static/ss_static_T60_algo_compare_calib_20261026_182233`。
 - 采购按当期 `Cq_t`，主 SDDP 按到货 `q_in` 计费；逐期成本剖面须保留时点差异说明。
 - 已实现 `workers` 路径级并行、`threads` COPT 内部线程、`progress.log`/`run.log`、
   失败 run 归档；不加安全界/fallback。
-- **正式运行进行中**（tag `rolling_T60_204105_final`），**尚无有效正式结果**；
-  旧 `capfix`/`simpletest`/`quick` 结果不能作为最终口径；数字以归档目录的
-  `summary.md`/`conclusion.md`/`comparison.json` 为准。
+- **正式结果**（2026-10-28，tag `rolling_T60_204105_final2`）：
+  N=10/M=50、seed_opt=2027、workers=6/threads=4；
+  滚动 39891.1219 vs 同 50 路径基线 35451.4783，配对差 +4439.6437
+  （+12.52%），t=8.40，胜率 8.00%，审计通过；相对全量基线 35833.3228
+  为 +11.32%，低于 active s,S 的 +13.65%。旧 `capfix`/`simpletest`/`quick`
+  结果不能作为最终口径；数字以归档目录
+  `results/rolling_horizon/rolling_T60_204105_final2_20261028_223241/` 为准。
 - 测试：`rolling_horizon/test/_t_pool.py`、`_t_lp.py`（L-1 状态/两层容量/目标复算/
   t=T q=0/追索 cap_end）、`_t_rollout.py`、`_t_evaluate.py`；现有
   `_t_lp_equiv.py` 仍通过。

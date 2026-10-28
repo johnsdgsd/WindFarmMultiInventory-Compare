@@ -26,10 +26,14 @@
 
 ## 状态
 
-正式运行正在后台进行：tag `rolling_T60_204105_final`，N=10、M=50、
-seed_opt=2027、COPT、workers=4。结果尚未产出；完成前不填任何绩效数字。
-更早的 `capfix`/`simpletest`/`quick` 运行口径或规模不符，均不作为论文结果。
-结果以归档目录的 `summary.md`/`conclusion.md`/`comparison.json` 为准。
+正式运行完成：`rolling_T60_204105_final2_20261028_223241`
+
+- N=10、M=50、seed_opt=2027、workers=6、threads=4、COPT；
+- 滚动均值 39891.1219，同 50 路径基线 35451.4783；
+  配对差 +4439.6437（+12.52%），t=8.40，胜率 8.00%，审计通过；
+- 相对全量基线 35833.3228 为 +11.32%，低于 active s,S 的 +13.65%；
+- 更早的 `capfix`/`simpletest`/`quick` 只作历史/smoke，不作论文结果。
+- 结果以归档目录的 `summary.md`/`conclusion.md`/`comparison.json` 为准。
 
 ## 运行
 
