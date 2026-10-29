@@ -74,6 +74,7 @@ class State:
 @dataclass
 class TwoStageResult:
     q_first: np.ndarray
+    tau_first: np.ndarray
     objective: float
     stats: LPStats
 
@@ -340,12 +341,15 @@ class TwoStageLP:
         self.threads = int(threads)
         self.lp: _SparseLP | None = None
         self.qfirst: list[int] = []
+        self.taufp: list[int] = []
+        self.taufm: list[int] = []
         self.state_vars: dict = {}
         self.dec: dict = {}
         self.constant = 0.0
         self.stats: LPStats | None = None
         self.x: np.ndarray | None = None
         self.q_first: np.ndarray | None = None
+        self.tau_first: np.ndarray | None = None
         self.build_s = 0.0
 
     # ---- 状态/决策表达式：返回 (变量下标|None, 常数) ----
@@ -377,21 +381,41 @@ class TwoStageLP:
                        solver=self.solver, threads=self.threads)
         self.lp = lp
 
-        # 第一阶段：q_t，全情景共享；无终端价值时 q_T=0
+        # 第一阶段：tau_t（先调拨）和 q_t（再订货），均全情景共享
+        self.taufp = [
+            lp.var(f"taufp[{r}]", lb=0.0, ub=float(self.Imax[r]))
+            for r in range(N_R)]
+        self.taufm = [
+            lp.var(f"taufm[{r}]", lb=0.0, ub=float(self.Imax[r]))
+            for r in range(N_R)]
         self.qfirst = [
             lp.var(f"qfirst[{r}]", lb=0.0,
                    ub=0.0 if self.t == self.T else float(self.Qmax[r]))
             for r in range(N_R)]
 
-        # 确定性期初容量：I_t + sum_l o_{l,t} + q_t <= Imax
+        # 第一阶段 tau 的确定性约束
+        for r in range(N_R):
+            lp.le({self.taufm[r]: 1.0, self.taufp[r]: -1.0},
+                  float(self.state.I[r]), name=f"tau_lo_f[{r}]")
+            lp.le({self.taufp[r]: 1.0, self.taufm[r]: -1.0},
+                  float(self.Imax[r] - self.state.I[r]),
+                  name=f"tau_hi_f[{r}]")
+            rhs_src = float(self.state.I.sum() - self.state.I[r])
+            lp.le({self.taufp[r]: 1.0, self.taufm[r]: -1.0},
+                  rhs_src, name=f"tau_src_f[{r}]")
+        row = {}
+        for r in range(N_R):
+            row[self.taufp[r]] = row.get(self.taufp[r], 0.0) + 1.0
+            row[self.taufm[r]] = row.get(self.taufm[r], 0.0) - 1.0
+        lp.eq(row, 0.0, name="tau_bal_f")
+
+        # 期初容量： (I_t + tau_t) + sum_l o_{l,t} + q_t <= Imax
         for r in range(N_R):
             base = float(self.state.I[r] + self.state.o[:, r].sum())
             rhs = float(self.Imax[r]) - base
-            if rhs < -1e-8:
-                raise LPError(
-                    f"t={self.t}: 期初状态已超容量，仓库 {r}: "
-                    f"I+sum(o)={base:.6f} > Imax={self.Imax[r]:.6f}")
-            lp.le({self.qfirst[r]: 1.0}, rhs, name=f"cap_init[{r}]")
+            lp.le({self.qfirst[r]: 1.0, self.taufp[r]: 1.0,
+                   self.taufm[r]: -1.0},
+                  rhs, name=f"cap_init[{r}]")
 
         # 状态变量：t+1..T+1；t 期状态已知
         for s in range(self.Nsc):
@@ -421,14 +445,16 @@ class TwoStageLP:
                     "y": [[lp.var(f"y[{s},{tau},{r},{m}]", 0.0,
                                   float(min(self.N[r], self.Imax[m])))
                            for m in range(N_R)] for r in range(N_R)],
-                    "taup": [lp.var(f"taup[{s},{tau},{r}]", 0.0,
-                                    float(min(self.Imax.sum()
-                                              + self.Qmax.sum(),
-                                              self.Imax[r])))
-                             for r in range(N_R)],
-                    "taum": [lp.var(f"taum[{s},{tau},{r}]", 0.0,
-                                    float(self.Imax[r] + self.Qmax[r]))
-                             for r in range(N_R)],
+                    "taup": (self.taufp if tau == self.t else
+                             [lp.var(f"taup[{s},{tau},{r}]", 0.0,
+                                     float(min(self.Imax.sum()
+                                               + self.Qmax.sum(),
+                                               self.Imax[r])))
+                              for r in range(N_R)]),
+                    "taum": (self.taufm if tau == self.t else
+                             [lp.var(f"taum[{s},{tau},{r}]", 0.0,
+                                     float(self.Imax[r] + self.Qmax[r]))
+                              for r in range(N_R)]),
                     "S_end": [lp.var(f"send[{s},{tau},{r}]", 0.0,
                                      float(self.Imax[r] + self.Qmax[r]))
                               for r in range(N_R)],
@@ -476,20 +502,20 @@ class TwoStageLP:
                         for i in range(j + 1):
                             c += _add(row, (d["N"][r][i][j], 0.0), -1.0)
                         lp.eq(row, -c, name=f"grade[{s},{tau},{r},{j}]")
-                    # S_end = I_tau - sum_s y + o_1
+                    # S_end = I_tau + tau - sum_s y + o_1
                     row = {}
                     c = _add(row, (d["S_end"][r], 0.0))
                     c += _add(row, self._I(s, tau, r), -1.0)
+                    c += _add(row, (d["taup"][r], 0.0), -1.0)
+                    c += _add(row, (d["taum"][r], 0.0), 1.0)
                     for ss in range(N_R):
                         c += _add(row, (d["y"][ss][r], 0.0), 1.0)
                     c += _add(row, self._o(s, tau, r, 0), -1.0)
                     lp.eq(row, -c, name=f"send[{s},{tau},{r}]")
-                    # I_{t+1} = S_end + tau
+                    # I_{t+1} = S_end（tau 已进入 S_end）
                     row = {}
                     c = _add(row, (nxt["I"][r], 0.0))
                     c += _add(row, (d["S_end"][r], 0.0), -1.0)
-                    c += _add(row, (d["taup"][r], 0.0), -1.0)
-                    c += _add(row, (d["taum"][r], 0.0), 1.0)
                     lp.eq(row, -c, name=f"inv[{s},{tau},{r}]")
                     # 在途状态转移：o_next[l]=o_tau[l+1]，末层=q_tau
                     for l in range(K - 1):
@@ -508,6 +534,8 @@ class TwoStageLP:
                     for ss in range(N_R):
                         c += _add(row, (d["y"][ss][r], 0.0))
                     c += _add(row, self._I(s, tau, r), -1.0)
+                    c += _add(row, (d["taup"][r], 0.0), -1.0)
+                    c += _add(row, (d["taum"][r], 0.0), 1.0)
                     lp.le(row, -c, name=f"pas[{s},{tau},{r}]")
                     # 需求/机队
                     row = {}
@@ -525,29 +553,32 @@ class TwoStageLP:
                         c += _add(row, self._n(s, tau, r, i))
                     lp.le(row, float(self.N[r] + self.fleet_tol) - c,
                           name=f"fleet[{s},{tau},{r}]")
-                    # tau
-                    row = {}
-                    c = _add(row, (d["S_end"][r], 0.0))
-                    c += _add(row, (d["taup"][r], 0.0))
-                    c += _add(row, (d["taum"][r], 0.0), -1.0)
-                    lp.le(row, float(self.Imax[r]) - c,
-                          name=f"tau_hi[{s},{tau},{r}]")
-                    row = {}
-                    c = _add(row, (d["S_end"][r], 0.0), -1.0)
-                    c += _add(row, (d["taup"][r], 0.0), -1.0)
-                    c += _add(row, (d["taum"][r], 0.0))
-                    lp.le(row, -c, name=f"tau_lo[{s},{tau},{r}]")
-                    row = {}
-                    c = _add(row, (d["taup"][r], 0.0))
-                    c += _add(row, (d["taum"][r], 0.0), -1.0)
-                    for m in range(N_R):
-                        if m != r:
-                            c += _add(row, (d["S_end"][m], 0.0), -1.0)
-                    lp.le(row, -c, name=f"tau_src[{s},{tau},{r}]")
-                    # 未来期的本期容量：I_tau + Σo_tau + q_tau <= Imax
+                    # tau：t 期已加确定性版本；未来期用 tau 前库存 I_tau
                     if tau > self.t:
                         row = {}
                         c = _add(row, self._I(s, tau, r), 1.0)
+                        c += _add(row, (d["taup"][r], 0.0), 1.0)
+                        c += _add(row, (d["taum"][r], 0.0), -1.0)
+                        lp.le(row, float(self.Imax[r]) - c,
+                              name=f"tau_hi[{s},{tau},{r}]")
+                        row = {}
+                        c = _add(row, self._I(s, tau, r), -1.0)
+                        c += _add(row, (d["taup"][r], 0.0), -1.0)
+                        c += _add(row, (d["taum"][r], 0.0))
+                        lp.le(row, -c, name=f"tau_lo[{s},{tau},{r}]")
+                        row = {}
+                        c = _add(row, (d["taup"][r], 0.0))
+                        c += _add(row, (d["taum"][r], 0.0), -1.0)
+                        for m in range(N_R):
+                            if m != r:
+                                c += _add(row, self._I(s, tau, m), -1.0)
+                        lp.le(row, -c, name=f"tau_src[{s},{tau},{r}]")
+                    # 未来期的本期容量：I_tau + tau + Σo_tau + q_tau <= Imax
+                    if tau > self.t:
+                        row = {}
+                        c = _add(row, self._I(s, tau, r), 1.0)
+                        c += _add(row, (d["taup"][r], 0.0), 1.0)
+                        c += _add(row, (d["taum"][r], 0.0), -1.0)
                         for l in range(K):
                             c += _add(row, self._o(s, tau, r, l), 1.0)
                         c += _add(row, self._q(s, tau, r), 1.0)
@@ -579,13 +610,14 @@ class TwoStageLP:
                     for m in range(N_R):
                         lp.c[d["y"][r][m]] += float(
                             self.tc[r, m]) * weight
-                # tau 守恒
-                row = {}
-                c = 0.0
-                for r in range(N_R):
-                    c += _add(row, (d["taup"][r], 0.0))
-                    c += _add(row, (d["taum"][r], 0.0), -1.0)
-                lp.eq(row, -c, name=f"tau_bal[{s},{tau}]")
+                # tau 守恒：t 期已加确定性版本
+                if tau > self.t:
+                    row = {}
+                    c = 0.0
+                    for r in range(N_R):
+                        c += _add(row, (d["taup"][r], 0.0))
+                        c += _add(row, (d["taum"][r], 0.0), -1.0)
+                    lp.eq(row, -c, name=f"tau_bal[{s},{tau}]")
 
         self.constant = float(const_total)
         self.build_s = time.perf_counter() - t0
@@ -597,20 +629,24 @@ class TwoStageLP:
         x, fun, n, neq, nle, solve_s = self.lp.solve()
         q = np.asarray([x[i] for i in self.qfirst], dtype=float)
         q = np.maximum(q, 0.0)
+        tau = np.asarray([x[self.taufp[r]] - x[self.taufm[r]]
+                          for r in range(self.N_R)], dtype=float)
         if np.any(q > np.asarray(self.prob.Qmax, dtype=float) + 1e-6):
             raise LPError(f"q_first 越上界: {q.tolist()}")
-        # cap_init 必须真正约束 q_t；若触发，说明优化 LP 的 qfirst/状态不一致。
-        viol = (self.state.I + self.state.o.sum(axis=0) + q
+        # cap_init 必须是 tau 后口径：I + tau + Σo + q <= Imax
+        viol = (self.state.I + tau + self.state.o.sum(axis=0) + q
                 - np.asarray(self.prob.Imax))
         if np.any(viol > 1e-6):
             raise LPError(
-                f"t={self.t}: q_first 违反 cap_init, viol={viol.tolist()}, "
-                f"I={self.state.I.tolist()}, "
+                f"t={self.t}: q_first/tau_first 违反 cap_init, "
+                f"viol={viol.tolist()}, I={self.state.I.tolist()}, "
+                f"tau={tau.tolist()}, "
                 f"sum_o={self.state.o.sum(axis=0).tolist()}, "
                 f"q={q.tolist()}, "
                 f"Imax={np.asarray(self.prob.Imax).tolist()}")
         self.x = x
         self.q_first = q
+        self.tau_first = tau
         self.stats = LPStats(
             name=self.lp.name, t=self.t, window=self.window,
             n_scen=self.Nsc, n_vars=n, n_eq=neq, n_le=nle,
@@ -618,8 +654,8 @@ class TwoStageLP:
             objective=float(fun + self.constant),
             constant=float(self.constant), solver=self.solver)
         return TwoStageResult(
-            q_first=q, objective=float(fun + self.constant),
-            stats=self.stats)
+            q_first=q, tau_first=tau,
+            objective=float(fun + self.constant), stats=self.stats)
 
 
 # --------------------------------------------------------------- 追索 LP
@@ -631,7 +667,7 @@ class RecourseLP:
     目标含 -Cs*Y（下一期待修减少的收益）和 h/2*I_out；仿真成本仍按即时五项累加。
     """
 
-    def __init__(self, prob, state: State, q_out, F_new,
+    def __init__(self, prob, state: State, q_out, tau_in, F_new,
                  time_limit: float | None = None,
                  solver: str = "copt", threads: int = 1):
         self.prob = prob
@@ -649,10 +685,13 @@ class RecourseLP:
         self.atc = float(getattr(prob, "atc", 0.0))
         self.tc = np.asarray(prob.tc_route, dtype=float)
         self.q_out = np.asarray(q_out, dtype=float).reshape(self.N_R)
+        self.tau_in = np.asarray(tau_in, dtype=float).reshape(self.N_R)
         self.F_new = np.asarray(F_new, dtype=float).reshape(self.N_R)
         if np.any(self.q_out < -1e-9) or np.any(
                 self.q_out > self.Qmax + 1e-9):
             raise ValueError("q_out 越界 [0,Qmax]")
+        if np.any(self.state.I + self.tau_in < -1e-6):
+            raise ValueError("tau_in 使库存为负")
         if not np.all(np.isfinite(self.F_new)) or np.any(self.F_new < -1e-9):
             raise ValueError(f"F_new 非法: {self.F_new}")
         self.W_in = self.N - self.state.n.sum(axis=1)
@@ -681,70 +720,42 @@ class RecourseLP:
         y = [[lp.var(f"y[{r},{m}]", 0.0,
                      float(min(self.N[r], self.Imax[m])))
               for m in range(N_R)] for r in range(N_R)]
-        taup = [lp.var(f"taup[{r}]", 0.0,
-                       float(min(self.Imax.sum() + self.Qmax.sum(),
-                                 self.Imax[r])))
-                for r in range(N_R)]
-        taum = [lp.var(f"taum[{r}]", 0.0,
-                       float(self.Imax[r] + self.Qmax[r]))
-                for r in range(N_R)]
         S_end = [lp.var(f"send[{r}]", 0.0,
                         float(self.Imax[r] + self.Qmax[r]))
                  for r in range(N_R)]
         I_out = [lp.var(f"Iout[{r}]", 0.0, float(self.Imax[r]))
                  for r in range(N_R)]
         self.y = y
-        self.taup = taup
-        self.taum = taum
         self.S_end = S_end
         self.I_out = I_out
 
         for r in range(N_R):
-            # 被动源容量
+            # 被动源容量：I + tau_in 是可调拨的库存
             row = {}
             c = 0.0
             for ss in range(N_R):
                 c += _add(row, (y[ss][r], 0.0))
-            lp.le(row, float(self.state.I[r]) - c, name=f"pas[{r}]")
+            lp.le(row, float(self.state.I[r] + self.tau_in[r]) - c,
+                  name=f"pas[{r}]")
             # 需求上限 Y <= W_in + F_new
             row = {}
             c = 0.0
             for m in range(N_R):
                 c += _add(row, (y[r][m], 0.0))
             lp.le(row, float(self.D[r]) - c, name=f"dem[{r}]")
-            # S_end = I - sum_s y + o_1
+            # S_end = I + tau_in - sum_s y + o_1
             row = {}
             c = _add(row, (S_end[r], 0.0))
-            c += -float(self.state.I[r])
+            c += -float(self.state.I[r] + self.tau_in[r])
             for ss in range(N_R):
                 c += _add(row, (y[ss][r], 0.0))
             c += -float(self.state.o[0, r])
             lp.eq(row, -c, name=f"send[{r}]")
-            # I_out = S_end + tau
+            # I_out = S_end
             row = {}
             c = _add(row, (I_out[r], 0.0))
             c += _add(row, (S_end[r], 0.0), -1.0)
-            c += _add(row, (taup[r], 0.0), -1.0)
-            c += _add(row, (taum[r], 0.0), 1.0)
             lp.eq(row, -c, name=f"inv[{r}]")
-            # tau 上下界与来源
-            row = {}
-            c = _add(row, (S_end[r], 0.0))
-            c += _add(row, (taup[r], 0.0))
-            c += _add(row, (taum[r], 0.0), -1.0)
-            lp.le(row, float(self.Imax[r]) - c, name=f"tau_hi[{r}]")
-            row = {}
-            c = _add(row, (S_end[r], 0.0), -1.0)
-            c += _add(row, (taup[r], 0.0), -1.0)
-            c += _add(row, (taum[r], 0.0))
-            lp.le(row, -c, name=f"tau_lo[{r}]")
-            row = {}
-            c = _add(row, (taup[r], 0.0))
-            c += _add(row, (taum[r], 0.0), -1.0)
-            for m in range(N_R):
-                if m != r:
-                    c += _add(row, (S_end[m], 0.0), -1.0)
-            lp.le(row, -c, name=f"tau_src[{r}]")
             # 真实执行后的下一期状态容量
             rhs = float(self.Imax[r] - self.o_next[:, r].sum())
             if rhs < -1e-8:
@@ -753,19 +764,10 @@ class RecourseLP:
                     f"sum(o_next)={self.o_next[:, r].sum():.6f}, "
                     f"Imax={self.Imax[r]:.6f}")
             lp.le({I_out[r]: 1.0}, rhs, name=f"cap_end[{r}]")
-            # 目标
+            # 目标（tau 已在第一阶段计价）
             lp.c[I_out[r]] += self.h / 2.0
-            lp.c[taup[r]] += self.atc / 2.0
-            lp.c[taum[r]] += self.atc / 2.0
             for m in range(N_R):
                 lp.c[y[r][m]] += (float(self.tc[r, m]) - self.Cs)
-        # tau 守恒
-        row = {}
-        c = 0.0
-        for r in range(N_R):
-            c += _add(row, (taup[r], 0.0))
-            c += _add(row, (taum[r], 0.0), -1.0)
-        lp.eq(row, -c, name="tau_bal")
         self.constant = 0.0
         self.build_s = time.perf_counter() - t0
         return self
@@ -776,10 +778,9 @@ class RecourseLP:
         x, fun, n, neq, nle, solve_s = self.lp.solve()
         yv = np.asarray([[x[self.y[r][m]] for m in range(self.N_R)]
                          for r in range(self.N_R)], dtype=float)
-        tau = np.asarray([x[self.taup[r]] - x[self.taum[r]]
-                          for r in range(self.N_R)], dtype=float)
-        taup = np.asarray([x[self.taup[r]] for r in range(self.N_R)])
-        taum = np.asarray([x[self.taum[r]] for r in range(self.N_R)])
+        tau = self.tau_in.copy()
+        taup = np.maximum(tau, 0.0)
+        taum = np.maximum(-tau, 0.0)
         S_end = np.asarray([x[self.S_end[r]] for r in range(self.N_R)])
         I_out = np.asarray([x[self.I_out[r]] for r in range(self.N_R)])
         self.stats = LPStats(

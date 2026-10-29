@@ -159,17 +159,24 @@ class Simulator:
             raise ValueError("当前状态运行台数超过机队")
         W_in_pos = np.maximum(W_in, 0.0)
 
-        q_out = np.asarray(policy.order(t, I, o, n), dtype=float)
+        q_out, tau = policy.order(t, I, o, n)
+        q_out = np.asarray(q_out, dtype=float)
+        tau = np.asarray(tau, dtype=float)
         if q_out.shape != (P, self.N_R):
-            raise ValueError(f"policy.order 返回 shape {q_out.shape}")
+            raise ValueError(f"policy.order 返回 q shape {q_out.shape}")
+        if tau.shape != (P, self.N_R):
+            raise ValueError(f"policy.order 返回 tau shape {tau.shape}")
         if np.any(q_out < -1e-8) or np.any(q_out > self.Qmax[None, :] + 1e-8):
             raise ValueError("policy.order 返回的 q 越界 [0,Qmax]")
-        cap_period = I + o.sum(axis=1) + q_out - self.Imax[None, :]
+        if np.any(np.abs(tau.sum(axis=1)) > 1e-6):
+            raise ValueError("第一阶段 tau 不满足 Σtau=0")
+        cap_period = I + tau + o.sum(axis=1) + q_out - self.Imax[None, :]
         if np.any(cap_period > 1e-6):
             p0, r0 = np.unravel_index(np.argmax(cap_period), cap_period.shape)
             raise ValueError(
                 f"t={t} 期初容量越界：path={p0} 仓={r0} "
-                f"I+Σo+q={I[p0,r0]+o[p0,:,r0].sum()+q_out[p0,r0]:.6f} "
+                f"I+tau+Σo+q="
+                f"{I[p0,r0]+tau[p0,r0]+o[p0,:,r0].sum()+q_out[p0,r0]:.6f} "
                 f"> Imax={self.Imax[r0]:.6f}")
 
         D = W_in_pos + F_new
@@ -182,7 +189,7 @@ class Simulator:
         # y[p,r,m]：目的地 r、来源 m；对 r 的出流是 sum_s y[s,r]
         outflow = y.sum(axis=1)
         Y = y.sum(axis=2)
-        S_end = I - outflow + o[:, 0, :]
+        S_end = I + tau - outflow + o[:, 0, :]
 
         n_raw = np.zeros((P, self.N_R, self.G), dtype=float)
         n_raw[:, :, 0] = Y + N_counts[:, :, 0, 0]
@@ -197,19 +204,10 @@ class Simulator:
             o_next[:, :self.K - 1, :] = o[:, 1:, :]
         o_next[:, self.K - 1, :] = q_out
 
-        tau = np.asarray(
-            policy.active_transfer(
-                t, S_end, W_out, n_out, o_next, q_out, theta),
-            dtype=float)
-        if tau.shape != (P, self.N_R):
-            raise ValueError(
-                f"policy.active_transfer 返回 shape {tau.shape}")
-        if np.any(np.abs(tau.sum(axis=1)) > 1e-6):
-            raise ValueError("主动调拨 tau 不满足 Σtau=0")
-        I_out = S_end + tau
+        I_out = S_end
         if np.any(I_out < -1e-6) or np.any(
                 I_out > self.Imax[None, :] + 1e-6):
-            raise ValueError("主动调拨后 I_out 越界")
+            raise ValueError("tau 后库存 I_out 越界")
         cap_next = I_out + o_next.sum(axis=1) - self.Imax[None, :]
         if np.any(cap_next > 1e-6):
             p0, r0 = np.unravel_index(np.argmax(cap_next), cap_next.shape)
@@ -382,7 +380,7 @@ def audit_result(prob, res: SimulationResult, *, tol: float = 1e-6,
             good = Nv[:, :, :G].sum(axis=(1, 2))
             capN = prob.N + prob.fleet_tol
             d = {
-                "pas": float(np.maximum(outflow - I, 0).max()),
+                "pas": float(np.maximum(outflow - (I + tau), 0).max()),
                 "fleet": float(np.maximum(nin.sum(axis=1) - capN, 0).max()),
                 "dem": float(np.maximum(Y + good - capN, 0).max()),
                 "grade0": grade0_dev,
@@ -391,16 +389,18 @@ def audit_result(prob, res: SimulationResult, *, tol: float = 1e-6,
                 "结构零": zero_dev,
                 "F_new": float(np.max(np.abs(F - F_calc))),
                 "W守恒": float(np.max(np.abs(W_out - (W_in + F_calc - Y)))),
-                "send_def": float(np.max(np.abs(S - (I - outflow + o[0])))),
+                "send_def": float(np.max(np.abs(
+                    S - (I + tau - outflow + o[0])))),
                 "tau_bal": float(abs(tau.sum())),
-                "tau_lo": float(np.maximum(-(S + tau), 0).max()),
-                "tau_hi": float(np.maximum(S + tau - prob.Imax, 0).max()),
-                "tau_src": float(np.maximum(tau - (S.sum() - S), 0).max()),
-                "inv": float(np.max(np.abs(Iout - (S + tau)))),
+                "tau_lo": float(np.maximum(-(I + tau), 0).max()),
+                "tau_hi": float(np.maximum(I + tau - prob.Imax, 0).max()),
+                "tau_src": float(np.maximum(
+                    tau - (I.sum() - I), 0).max()),
+                "inv": float(np.max(np.abs(Iout - S))),
                 "pipe": float(np.max(np.abs(on[:K - 1] - o[1:]))) if K > 1 else 0.0,
                 "pipe_last": float(np.max(np.abs(on[K - 1] - q))),
-                "cap_init": float(np.maximum(I + o.sum(axis=0) + q
-                                             - prob.Imax, 0).max()),
+                "cap_init": float(np.maximum(
+                    I + tau + o.sum(axis=0) + q - prob.Imax, 0).max()),
                 "cap_next": float(np.maximum(Iout + on.sum(axis=0)
                                              - prob.Imax, 0).max()),
                 "界.下": float(max(0.0, -min(I.min(), o.min(), nin.min()))),

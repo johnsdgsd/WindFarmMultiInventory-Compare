@@ -53,19 +53,21 @@ def main():
     NR = prob.N_R
 
     check(res.q_first.shape == (NR,), "q_first shape")
+    check(res.tau_first.shape == (NR,), "tau_first shape")
     check(np.all(res.q_first >= -1e-8), "q_first 负值")
     check(np.all(res.q_first <= np.asarray(prob.Qmax) + 1e-6),
           "q_first 越上界")
     check(len(lp.qfirst) == NR, "qfirst 数量")
+    check(len(lp.taufp) == NR and len(lp.taufm) == NR, "tauf 数量")
     check(lp.dec[(0, 1)]["q"] is None, "t 期 q 应使用 qfirst")
     check(lp.dec[(0, prob.T)]["q"] is not None, "T 期 q 应为追索变量")
     check(lp.stats.n_vars > 0 and lp.stats.n_eq > 0 and lp.stats.n_le > 0,
           "LP 统计")
     check(lp.stats.window == prob.T, "window")
     check(lp.stats.solver == "copt", "solver")
-    init_cap = state.I + state.o.sum(axis=0) + res.q_first
+    init_cap = state.I + res.tau_first + state.o.sum(axis=0) + res.q_first
     check(np.all(init_cap <= np.asarray(prob.Imax) + TOL),
-          f"期初容量 qfirst 越界: {init_cap}")
+          f"期初容量 qfirst/tau 越界: {init_cap}")
 
     for s in range(2):
         for r in range(NR):
@@ -110,23 +112,25 @@ def main():
                 check(np.allclose(
                     n_next[:, j], Nv[:, :j + 1, j].sum(axis=1), atol=TOL),
                     f"grade{j} t={tau}")
-            check(np.allclose(Sn, I_tau - outflow + o_tau[0], atol=TOL),
-                  f"S_end t={tau}")
-            check(np.allclose(I_next, Sn + tau_net, atol=TOL),
+            check(np.allclose(Sn, I_tau + tau_net - outflow + o_tau[0],
+                              atol=TOL), f"S_end t={tau}")
+            check(np.allclose(I_next, Sn, atol=TOL),
                   f"I_out t={tau}")
             if K > 1:
                 check(np.allclose(o_next[:K - 1], o_tau[1:], atol=TOL),
                       f"pipe t={tau}")
             check(np.allclose(o_next[K - 1], q, atol=TOL),
                   f"pipe_last t={tau}")
-            check(np.all(Sn + tau_net >= -TOL), f"tau_lo t={tau}")
-            check(np.all(Sn + tau_net <= np.asarray(prob.Imax) + TOL),
+            check(np.all(I_tau + tau_net >= -TOL), f"tau_lo t={tau}")
+            check(np.all(I_tau + tau_net
+                         <= np.asarray(prob.Imax) + TOL),
                   f"tau_hi t={tau}")
             check(np.all(tau_net <= np.array(
-                [Sn[[m for m in range(NR) if m != r]].sum()
+                [I_tau[[m for m in range(NR) if m != r]].sum()
                  for r in range(NR)]) + TOL), f"tau_src t={tau}")
             check(abs(tau_net.sum()) < TOL, f"tau_bal t={tau}")
-            check(np.all(outflow <= I_tau + TOL), f"pas t={tau}")
+            check(np.all(outflow <= I_tau + tau_net + TOL),
+                  f"pas t={tau}")
             check(np.all(Y + Nv[:, :, :G].sum(axis=(1, 2))
                          <= np.asarray(prob.N) + prob.fleet_tol + TOL),
                   f"dem t={tau}")
@@ -134,7 +138,7 @@ def main():
                          <= np.asarray(prob.N) + prob.fleet_tol + TOL),
                   f"fleet t={tau}")
             if tau > 1:
-                check(np.all(I_tau + o_tau.sum(axis=0) + q
+                check(np.all(I_tau + tau_net + o_tau.sum(axis=0) + q
                              <= np.asarray(prob.Imax) + TOL),
                       f"cap t={tau}")
             check(np.all(I_next + o_next.sum(axis=0)
@@ -201,15 +205,18 @@ def main():
     Nv = state.n[:, :, None] * th
     F = Nv[:, :, prob.G].sum(axis=1)
     q = res.q_first
-    rec = RecourseLP(prob, state, q, F, solver="copt", threads=1)
+    tau_in = res.tau_first
+    rec = RecourseLP(prob, state, q, tau_in, F,
+                     solver="copt", threads=1)
     rr = rec.solve()
     check(rr.y.shape == (NR, NR), "recourse y shape")
+    check(np.allclose(rr.tau, tau_in, atol=TOL), "recourse tau=tau_in")
     check(abs(rr.tau.sum()) < TOL, "recourse tau_bal")
-    check(np.all(rr.S_end + rr.tau >= -TOL), "recourse tau_lo")
-    check(np.all(rr.S_end + rr.tau <= np.asarray(prob.Imax) + TOL),
+    check(np.all(state.I + rr.tau >= -TOL), "recourse tau_lo")
+    check(np.all(state.I + rr.tau <= np.asarray(prob.Imax) + TOL),
           "recourse tau_hi")
     outflow = rr.y.sum(axis=0)
-    check(np.all(outflow <= state.I + TOL), "recourse pas")
+    check(np.all(outflow <= state.I + tau_in + TOL), "recourse pas")
     check(np.all(rr.y.sum(axis=1)
                  <= prob.N - state.n.sum(axis=1) + F + TOL),
           "recourse dem")
@@ -219,9 +226,10 @@ def main():
     o_next[K - 1] = q
     check(np.all(rr.I_out + o_next.sum(axis=0)
                  <= np.asarray(prob.Imax) + TOL), "recourse cap_end")
-    check(np.allclose(rr.I_out, rr.S_end + rr.tau, atol=TOL),
+    check(np.allclose(rr.I_out, rr.S_end, atol=TOL),
           "recourse I_out")
-    check(np.allclose(rr.S_end, state.I - outflow + state.o[0],
+    check(np.allclose(rr.S_end,
+                      state.I + tau_in - outflow + state.o[0],
                       atol=TOL), "recourse S_end")
 
     # 满库存状态：t 期 qfirst 为 0

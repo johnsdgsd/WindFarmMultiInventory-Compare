@@ -69,7 +69,9 @@ def main():
     check(np.allclose(res.arrays["taum"], np.maximum(-tau, 0.0)),
           "taum != max(-tau,0)")
     check(np.allclose(tau.sum(axis=2), 0.0, atol=1e-8), "tau 不守恒")
-    iout = res.arrays["S_end"] + tau
+    iout = res.arrays["I_out"]
+    check(np.allclose(iout, res.arrays["S_end"], atol=1e-8),
+          "新时序 I_out != S_end")
     check(np.allclose(res.arrays["x_in"][:, 1:, :prob.N_R],
                       iout[:, :-1, :], atol=cfg.state_tol),
           "I_out 与下一期 I 不一致")

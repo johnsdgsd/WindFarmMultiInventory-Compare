@@ -55,6 +55,7 @@ class RollingHorizonPolicy:
         self._o = None
         self._n = None
         self._qout = None
+        self._tau_first = None
         self._tau = None
         self._y = None
         self.lp_stats: list[dict] = []
@@ -89,10 +90,12 @@ class RollingHorizonPolicy:
             raise ValueError(f"n shape {n.shape}")
         t = int(t)
         if t == 0:
-            return np.zeros((P, self.N_R), dtype=float)
+            z = np.zeros((P, self.N_R), dtype=float)
+            return z, z.copy()
 
         self._t = t
         qout = np.zeros((P, self.N_R), dtype=float)
+        tauout = np.zeros((P, self.N_R), dtype=float)
         theta_win = self.pool[:, t - 1:, :, :, :]
         states = [State(I[p], o[p], n[p]) for p in range(P)]
         results = {}
@@ -134,6 +137,7 @@ class RollingHorizonPolicy:
             qout[p] = np.clip(
                 res.q_first, 0.0,
                 np.asarray(self.prob.Qmax, dtype=float))
+            tauout[p] = np.asarray(res.tau_first, dtype=float)
             stt = res.stats
             self.lp_stats.append({
                 "path": int(p), "t": t, "window": stt.window,
@@ -148,6 +152,7 @@ class RollingHorizonPolicy:
         self._o = o.copy()
         self._n = n.copy()
         self._qout = qout.copy()
+        self._tau_first = tauout.copy()
         self._tau = None
         self._y = None
         if self._t0 is None:
@@ -160,7 +165,7 @@ class RollingHorizonPolicy:
                     f"[rolling] t={t:03d}/{self.T} paths={P} "
                     f"lp_calls={self._total_lp_solves} "
                     f"elapsed={elapsed:.1f}s eta~{eta:.0f}s")
-        return qout
+        return qout, tauout
 
     # ------------------------------------------------------------- 追索
     def _solve_recourse(self, p, I, D):
@@ -169,7 +174,7 @@ class RollingHorizonPolicy:
         F_new = D[p] - np.maximum(W_in, 0.0)
         st = State(I[p], self._o[p], self._n[p])
         lp = RecourseLP(
-            self.prob, st, self._qout[p], F_new,
+            self.prob, st, self._qout[p], self._tau_first[p], F_new,
             time_limit=self.time_limit,
             solver=self.solver, threads=self.threads)
         return p, lp.solve()
