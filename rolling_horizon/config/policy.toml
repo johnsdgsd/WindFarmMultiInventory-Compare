@@ -2,6 +2,7 @@
 # 说明：窗口取剩余全部时域；第一阶段只有 q_t；终端 V_{T+1}=0。
 [policy]
 solver = "copt"              # copt / highs
+fallback_solver = "highs"    # COPT 数值失败(status=5)时自动切 HiGHS
 threads = 4                  # 每个 LP 的 COPT 线程
 workers = 4                  # 按真实路径并行求解的线程数
 log_every = 1                # 每多少期写一次进度日志

@@ -1,0 +1,33 @@
+# PPO tau-first（新时序 tau_t -> q_t -> Theta_t -> y_t）
+# 运行命令见 ppo_taufirst/README.md。
+# 事实源：problem_data.json（T=60, G=4, N_R=5, L=3）；默认用新 T60 基线 204105。
+
+[run]
+tag = "ppo_taufirst_T60_204105"
+compare_config = "config/compare_T60_base204105.toml"
+episodes = 8000          # 训练回合数（一轮完整回合 = 一次迭代）
+seed = 2027
+threads = 4
+reward_scale = 0.001     # PPO 学习用常数缩放；报告仍用实际万元成本
+terminal_q_zero = true   # 与 rolling/SDDP 口径一致：末期 q_T=0
+archive_root = "results"
+
+[ppo]
+hidden = [128, 128]      # 2 层 MLP（actor / critic 各自）
+gamma = 0.99
+gae_lambda = 0.95
+clip = 0.2
+lr = 0.0003
+entropy_coef = 0.01
+value_coef = 0.5
+max_grad_norm = 0.5
+rollout_steps = 2048
+minibatch = 256
+epochs = 4
+log_std_init = -0.5
+normalize_adv = true
+
+[evaluation]
+m_paths = 50             # 可选配对评估：基线 scene 前 50 条
+episodes = 3000          # 训练后独立回合仿真数
+sim_seed = 888           # 仿真 Theta 种子

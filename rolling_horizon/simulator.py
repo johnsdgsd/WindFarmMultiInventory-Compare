@@ -183,8 +183,10 @@ class Simulator:
         y = np.asarray(policy.fulfill(t, I, D), dtype=float)
         if y.shape != (P, self.N_R, self.N_R):
             raise ValueError(f"policy.fulfill 返回 shape {y.shape}")
-        if np.any(y < -1e-8):
+        if np.any(y < -1e-6):
             raise ValueError("policy.fulfill 返回负的 y")
+        # 吸收 COPT FeasTol 量级的负残差
+        y = np.maximum(y, 0.0)
 
         # y[p,r,m]：目的地 r、来源 m；对 r 的出流是 sum_s y[s,r]
         outflow = y.sum(axis=1)

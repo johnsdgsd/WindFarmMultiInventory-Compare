@@ -245,22 +245,26 @@ class _SparseLP:
                       for lb, ub in zip(self.lb, self.ub)]
             eq = slice(0, n_eq)
             le = slice(n_eq, n_eq + n_le)
-            res = linprog(
-                np.asarray(self.c, dtype=float),
-                A_ub=A[le, :] if n_le else None,
-                b_ub=rhs[le] if n_le else None,
-                A_eq=A[eq, :] if n_eq else None,
-                b_eq=rhs[eq] if n_eq else None,
-                bounds=bounds, method="highs",
-                options={"presolve": True, "disp": False})
+            last = None
+            for method in ("highs", "highs-ipm", "highs-ds"):
+                res = linprog(
+                    np.asarray(self.c, dtype=float),
+                    A_ub=A[le, :] if n_le else None,
+                    b_ub=rhs[le] if n_le else None,
+                    A_eq=A[eq, :] if n_eq else None,
+                    b_eq=rhs[eq] if n_eq else None,
+                    bounds=bounds, method=method,
+                    options={"presolve": True, "disp": False})
+                last = res
+                if res.success and res.x is not None:
+                    solve_s = time.perf_counter() - t0
+                    return (np.asarray(res.x, dtype=float), float(res.fun),
+                            n, n_eq, n_le, solve_s)
             solve_s = time.perf_counter() - t0
-            if not res.success or res.x is None:
-                raise LPError(
-                    f"{self.name}: HiGHS 失败 status={res.status}: "
-                    f"{res.message}", n_vars=n, n_eq=n_eq,
-                    n_le=n_le, solve_s=solve_s)
-            return (np.asarray(res.x, dtype=float), float(res.fun),
-                    n, n_eq, n_le, solve_s)
+            raise LPError(
+                f"{self.name}: HiGHS 三种方法均失败 status={last.status}: "
+                f"{last.message}", n_vars=n, n_eq=n_eq,
+                n_le=n_le, solve_s=solve_s)
         raise ValueError(f"未知 solver: {self.solver}")
 
 
@@ -382,11 +386,18 @@ class TwoStageLP:
         self.lp = lp
 
         # 第一阶段：tau_t（先调拨）和 q_t（再订货），均全情景共享
+        # tau 的紧上界是约束的推论：流入 <= Imax-I 且 <= 其他仓可用库存；
+        # 流出 <= I。收紧边界可减少 tau+ / tau- 的共同偏移和数值退化。
+        sum_I = float(self.state.I.sum())
+        ubp = [max(0.0, min(float(self.Imax[r] - self.state.I[r]),
+                            sum_I - float(self.state.I[r])))
+               for r in range(N_R)]
+        ubm = [max(0.0, float(self.state.I[r])) for r in range(N_R)]
         self.taufp = [
-            lp.var(f"taufp[{r}]", lb=0.0, ub=float(self.Imax[r]))
+            lp.var(f"taufp[{r}]", lb=0.0, ub=float(ubp[r]))
             for r in range(N_R)]
         self.taufm = [
-            lp.var(f"taufm[{r}]", lb=0.0, ub=float(self.Imax[r]))
+            lp.var(f"taufm[{r}]", lb=0.0, ub=float(ubm[r]))
             for r in range(N_R)]
         self.qfirst = [
             lp.var(f"qfirst[{r}]", lb=0.0,

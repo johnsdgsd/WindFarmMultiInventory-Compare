@@ -36,6 +36,8 @@ class RollingHorizonPolicy:
         self.seed_opt = seed_opt
         self.pool_hash = pool_hash
         self.solver = str(self.options.get("solver", "copt"))
+        fb = str(self.options.get("fallback_solver", "highs"))
+        self.fallback_solver = None if fb.lower() in ("", "none") else fb
         self.threads = int(self.options.get("threads", 1))
         self.workers = max(1, int(self.options.get("workers", 1)))
         tl = self.options.get("time_limit", None)
@@ -46,6 +48,7 @@ class RollingHorizonPolicy:
         self._log = log
         self._t0 = None
         self._total_lp_solves = 0
+        self._fallback_calls = 0
         self.active = str(self.options.get("active", "lp"))
         if self.active != "lp":
             raise ValueError("滚动时域只实现 active='lp'（LP 优化 tau）")
@@ -70,12 +73,29 @@ class RollingHorizonPolicy:
 
     # ------------------------------------------------------------- 订货
     def _solve_order(self, p, st: State, theta_win):
-        lp = TwoStageLP(
-            self.prob, st, self._t, theta_win,
-            time_limit=self.time_limit,
-            solver=self.solver, threads=self.threads)
-        res = lp.solve()
-        return p, res
+        try:
+            lp = TwoStageLP(
+                self.prob, st, self._t, theta_win,
+                time_limit=self.time_limit,
+                solver=self.solver, threads=self.threads)
+            return p, lp.solve()
+        except LPError as first:
+            if self.fallback_solver is None or self.solver == self.fallback_solver:
+                raise
+            self._fallback_calls += 1
+            self._log_line(
+                f"[rolling] path={p} t={self._t} {self.solver} 失败，"
+                f"切 {self.fallback_solver}: {first}")
+            lp2 = TwoStageLP(
+                self.prob, st, self._t, theta_win,
+                time_limit=self.time_limit,
+                solver=self.fallback_solver, threads=self.threads)
+            try:
+                return p, lp2.solve()
+            except Exception as second:
+                raise LPError(
+                    f"两阶段 LP 双求解器失败；{self.solver}: {first}; "
+                    f"{self.fallback_solver}: {second}") from second
 
     def order(self, t: int, I, o, n):
         I = np.asarray(I, dtype=float)
@@ -173,11 +193,26 @@ class RollingHorizonPolicy:
             self._n[p].sum(axis=1)
         F_new = D[p] - np.maximum(W_in, 0.0)
         st = State(I[p], self._o[p], self._n[p])
-        lp = RecourseLP(
-            self.prob, st, self._qout[p], self._tau_first[p], F_new,
-            time_limit=self.time_limit,
-            solver=self.solver, threads=self.threads)
-        return p, lp.solve()
+        try:
+            lp = RecourseLP(
+                self.prob, st, self._qout[p], self._tau_first[p], F_new,
+                time_limit=self.time_limit,
+                solver=self.solver, threads=self.threads)
+            return p, lp.solve()
+        except LPError as first:
+            if self.fallback_solver is None or self.solver == self.fallback_solver:
+                raise
+            self._fallback_calls += 1
+            lp2 = RecourseLP(
+                self.prob, st, self._qout[p], self._tau_first[p], F_new,
+                time_limit=self.time_limit,
+                solver=self.fallback_solver, threads=self.threads)
+            try:
+                return p, lp2.solve()
+            except Exception as second:
+                raise LPError(
+                    f"追索 LP 双求解器失败；{self.solver}: {first}; "
+                    f"{self.fallback_solver}: {second}") from second
 
     def fulfill(self, t: int, I, D):
         if self._t != int(t):
@@ -267,6 +302,8 @@ class RollingHorizonPolicy:
             "purchase_timing": "current_q",
             "capacity_side": "period_and_next",
             "solver": self.solver,
+            "fallback_solver": self.fallback_solver,
+            "fallback_calls": int(self._fallback_calls),
             "threads": self.threads,
             "workers": self.workers,
             "time_limit": self.time_limit,
