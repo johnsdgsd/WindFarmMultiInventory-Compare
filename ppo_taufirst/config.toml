@@ -5,7 +5,7 @@
 [run]
 tag = "ppo_taufirst_T60_204105"
 compare_config = "config/compare_T60_base204105.toml"
-episodes = 8000          # 训练回合数（一轮完整回合 = 一次迭代）
+episodes = 10000         # 训练回合数（一轮完整回合 = 一次迭代）
 seed = 2027
 threads = 4
 reward_scale = 0.001     # PPO 学习用常数缩放；报告仍用实际万元成本
@@ -29,5 +29,5 @@ normalize_adv = true
 
 [evaluation]
 m_paths = 50             # 可选配对评估：基线 scene 前 50 条
-episodes = 3000          # 训练后独立回合仿真数
+episodes = 5000          # 训练后独立回合仿真数
 sim_seed = 888           # 仿真 Theta 种子

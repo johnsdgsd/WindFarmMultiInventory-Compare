@@ -104,7 +104,7 @@ def main():
     if env.priority[1] != [1, 0, 2, 3, 4]:
         raise AssertionError(f"仓库2 priority={env.priority[1]}")
     obs = env.reset()
-    if obs.shape != (35,):
+    if obs.shape != (36,):
         raise AssertionError(f"obs shape {obs.shape}")
     if not np.allclose(obs[:5], prob.I0 / prob.Imax):
         raise AssertionError("I/Imax 归一化不符")
@@ -114,6 +114,8 @@ def main():
         raise AssertionError("o1/Qmax 归一化不符")
     if not np.allclose(obs[30:35], prob.o0[1] / prob.Qmax):
         raise AssertionError("o2/Qmax 归一化不符")
+    if abs(float(obs[35])) > 1e-9:
+        raise AssertionError("t=0 时间特征应为 0")
 
     # 2) 初始状态零动作：tau=0，q=0，cost=0（初始无库存、无停机）
     obs2, r, done, info = env.step(np.zeros(env.act_dim))

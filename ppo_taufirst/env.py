@@ -332,10 +332,11 @@ class TauFirstEnv:
                 raise ValueError(
                     f"仓库 {r + 1} 的跨仓顺序 {got} 与 priority "
                     f"{expected} 不一致；请检查 tc_route 是否由 priority 生成")
-        self.obs_dim = self.N_R + self.N_R * self.G + 2 * self.N_R
+        # 状态 + 归一化时间 t/(T-1)；PPO 需要显式时间特征
+        self.obs_dim = self.N_R + self.N_R * self.G + 2 * self.N_R + 1
         self.act_dim = 2 * self.N_R
-        if self.obs_dim != 35:
-            raise ValueError(f"T60 口径下 obs_dim 应为 35，实际 {self.obs_dim}")
+        if self.obs_dim != 36:
+            raise ValueError(f"T60 口径下 obs_dim 应为 36，实际 {self.obs_dim}")
         self.theta_path = None
         self._theta_path_input = theta_path
         self.reset(theta_path=theta_path)
@@ -387,11 +388,13 @@ class TauFirstEnv:
         return self.observation()
 
     def observation(self) -> np.ndarray:
+        time_frac = self.t / max(1, self.T - 1)
         obs = np.concatenate([
             self.I / self.Imax,
             (self.n / self.N[:, None]).reshape(-1),
             self.o1 / self.Qmax,
             self.o2 / self.Qmax,
+            np.asarray([time_frac], dtype=float),
         ]).astype(np.float32)
         if obs.shape != (self.obs_dim,):
             raise RuntimeError(f"obs shape {obs.shape}")

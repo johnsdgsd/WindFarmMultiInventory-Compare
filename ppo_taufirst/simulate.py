@@ -99,7 +99,7 @@ def main(argv=None):
                  ("G", int(prob.G)), ("L", int(prob.L))):
         if int(meta.get(k, -1)) != v:
             raise ValueError(f"策略 meta {k}={meta.get(k)} 与模型 {v} 不一致")
-    if int(meta.get("obs_dim", -1)) != 35 or int(meta.get("act_dim", -1)) != 10:
+    if int(meta.get("obs_dim", -1)) != 36 or int(meta.get("act_dim", -1)) != 10:
         raise ValueError("策略 obs_dim/act_dim 异常")
     pd_hash = sha256_file(cfg.problem_data) if Path(cfg.problem_data).is_file() \
         else None

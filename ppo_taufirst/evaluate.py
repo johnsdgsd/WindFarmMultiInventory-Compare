@@ -303,7 +303,8 @@ def _summary_md(ctx: dict) -> str:
         "",
         "- 新时序：`tau_t -> q_t -> Theta_t -> y_t`；策略在 tau/q 时只看到状态，"
         "不看本期 Theta_t。",
-        "- 状态：`s_t=(I,n,o1,o2)`，观测 35 维：`I/Imax, n/N, o1/Qmax, o2/Qmax`；"
+        "- 状态：`s_t=(I,n,o1,o2)`，观测 36 维："
+        "`I/Imax, n/N, o1/Qmax, o2/Qmax, t/(T-1)`；"
         "没有 q0 状态。",
         "- 动作：10 维 Gaussian；前 5 维 ×Imax 得 tau 原始量，后 5 维 ×Qmax 得 q "
         "原始量；env 先投影 tau（箱约束 + Σtau=0），再投影 q。",
@@ -500,7 +501,7 @@ def main(argv=None):
                  ("G", int(prob.G)), ("L", int(prob.L))):
         if int(meta.get(k, -1)) != v:
             raise ValueError(f"策略 meta {k}={meta.get(k)} 与模型 {v} 不一致")
-    if int(meta.get("obs_dim", -1)) != 35 or int(meta.get("act_dim", -1)) != 10:
+    if int(meta.get("obs_dim", -1)) != 36 or int(meta.get("act_dim", -1)) != 10:
         raise ValueError(f"策略维度异常: obs_dim={meta.get('obs_dim')}, "
                          f"act_dim={meta.get('act_dim')}")
     pd_hash = sha256_file(cfg.problem_data) if Path(cfg.problem_data).is_file() \

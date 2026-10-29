@@ -216,7 +216,7 @@ def main(argv=None):
         "problem_data_hash": sha256_file(cfg.problem_data)
         if Path(cfg.problem_data).is_file() else None,
         "compare_config": str(cfg.config_path),
-        "state": "I,n,o1,o2",
+        "state": "I,n,o1,o2,t",
         "timing": "tau_t -> q_t -> Theta_t -> y_t",
         "action": "10d raw; tau=raw[:5]*Imax; q=raw[5:]*Qmax; env projects",
         "obs_norm": {

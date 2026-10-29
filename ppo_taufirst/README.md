@@ -20,7 +20,7 @@ s_t=(I,n,o1,o2)
 ```
 
 - 状态：`I(5), n(5×4), o1(5), o2(5)`；没有 q0 状态。
-- 观测 35 维：`[I/Imax, n/N, o1/Qmax, o2/Qmax]`。
+- 观测 36 维：`[I/Imax, n/N, o1/Qmax, o2/Qmax, t/(T-1)]`。
 - 转移：
   `I_{t+1}=I_t+tau_t-Σ_dest y[dest,r,t]+o1_t`，
   `o1_{t+1}=o2_t`，`o2_{t+1}=q_t`，
@@ -88,7 +88,7 @@ P="D:/WYJ/Anaconda/Anaconda3/envs/MyRL/python.exe"
 ### 5.2 训练（从零；只需设置回合数）
 
 ```bash
-"$P" -B ppo_taufirst/train.py --episodes 8000 --seed 2027 \
+"$P" -B ppo_taufirst/train.py --episodes 10000 --seed 2027 \
   --tag ppo_taufirst_T60_204105 --threads 4
 ```
 
@@ -105,12 +105,12 @@ P="D:/WYJ/Anaconda/Anaconda3/envs/MyRL/python.exe"
   --run results/ppo_taufirst/<train_run> --baseline-mean 35833.3228
 ```
 
-### 5.4 训练后回合仿真（3000 回合，均值和 95% CI）
+### 5.4 训练后回合仿真（5000 回合，均值和 95% CI）
 
 ```bash
 "$P" -B ppo_taufirst/simulate.py \
   --policy results/ppo_taufirst/<train_run>/policy.pt \
-  --episodes 3000 --seed 888 --threads 4
+  --episodes 5000 --seed 888 --threads 4
 ```
 
 输出到 `<train_run>/simulation/`：`episode_costs.csv`、`summary.md`、
@@ -128,25 +128,23 @@ P="D:/WYJ/Anaconda/Anaconda3/envs/MyRL/python.exe"
 "$P" -B ppo_taufirst/diagnose.py --m-paths 50
 ```
 
-## 6. 当前从零训练结果（8000 回合，已收敛）
+## 6. 当前从零训练结果（时间特征 + 10000 回合）
 
-- 训练：`results/ppo_taufirst/ppo_scratch_8000ep_20261029_124203`
-  - 8,000 episodes（480,000 env steps），墙钟约 528 s（CPU，4 线程）。
-  - `train_curve.png`：episode 总成本前 10% 均值 **146,598.8**，
-    后 10% 均值 **42,599.8**；baseline 35,833.3（虚线）。
-  - **收敛证据**：最后三个十分位（episodes 5601-6400 / 6401-7200 /
-    7201-8000）均值分别为 **42,044.8 / 43,081.4 / 42,599.8**，已基本走平；
-    3333 episodes（200k env steps）时仍明显下降，尚未收敛。
+- 训练：`results/ppo_taufirst/ppo_taufirst_tobs_10000ep_20261029_132639`
+  - 10,000 episodes（600,000 env steps），墙钟约 652 s（CPU，4 线程）。
+  - 观测含 `t/(T-1)`，`obs_dim=36`。
+  - 最后 10% 回合平均成本 **38,525.31**。
   - `episode_log.csv` / `train_episodes.log`：每个回合的总成本。
-- 回合仿真：`results/ppo_taufirst/ppo_scratch_8000ep_20261029_124203/simulation`
-  - 3,000 个独立回合（Theta seed=888，确定性动作，T=60），墙钟约 184 s。
-  - **PPO 均值 37,285.95 万元/路径；95% CI [36,902.57, 37,669.33]**；
-    std=10,713.73，SE=195.61。
-  - 基线 3,000 条测试路径均值 35,833.32；差 **+1,452.62（+4.05%）**，
-    95% CI [+892.35, +2,012.90]。
-- 结论：从零训练 8000 回合后，训练总成本已走平；确定性 3000 回合仿真均值
-  比 SDDP 基线高约 4.05%。这是当前从零 PPO 的收敛结果，没有手工 q 偏置。
-  若还要缩小剩余 4%，需要更多回合/调参，而不是改变收敛口径。
+- 回合仿真：`.../simulation`
+  - 5,000 个独立回合（Theta seed=888，确定性动作，T=60），墙钟约 333 s。
+  - **PPO 均值 36,645.85 万元/路径；95% CI [36,371.05, 36,920.64]**；
+    std=9,913.89，SE=140.20。
+  - 基线 3,000 条测试路径均值 35,833.32；差 **+812.52（+2.27%）**，
+    95% CI [+320.14, +1,304.91]。
+- 结论：加入时间特征后，PPO 从旧版约 37.29k 降到 36.65k；
+  仍比 SDDP 基线高约 2.27%，95% CI 不含 0。单 seed、5000 回合独立仿真。
+- 旧版无时间特征 8000 回合结果（37,285.95，+4.05%）保留作历史对照，
+  不再作为当前主结果。
 
 ## 7. 文件
 
@@ -162,8 +160,8 @@ P="D:/WYJ/Anaconda/Anaconda3/envs/MyRL/python.exe"
 3. **优先级规则**：当前是全局 `(tc,dest,source)` 贪心（与
    `ss_static`/`docs/s,S.md` 同口径）；每个目的地的 source 顺序与
    `prob.priority` 一致。若你要逐目的地顺序处理，需要改。
-4. **信息集**：PPO 是 state-only、观测不含时间 t（stationary）；
-   SDDP/rolling 使用更丰富信息；被动 y 是规则而非 LP 优化。
+4. **信息集**：PPO 是 state-only，观测包含 `t/(T-1)` 但不含未来 Theta、
+   价值函数或历史；SDDP/rolling 使用更丰富信息；被动 y 是规则而非 LP 优化。
 5. **动作投影**：Gaussian 原始动作经 env 投影，投影会扭曲梯度；
    投影量可查 `sim_*npz`/`comparison.json`。
-6. **单 seed / 3000 回合**：当前是单次训练 + 单次仿真；论文建议多 seed。
+6. **单 seed / 5000 回合**：当前是单次训练 + 单次仿真；论文建议多 seed。
