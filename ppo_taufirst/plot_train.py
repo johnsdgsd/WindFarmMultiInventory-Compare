@@ -1,7 +1,7 @@
 """画每个回合的总成本随回合数下降的曲线（train_curve.png）。
 
-- 读取训练目录的 episode_log.csv（episode, total_cost, ...）；
-- 原始点 + EMA 平滑；
+- 只读取并绘制 episode_log.csv 的 total_cost（原始未缩放成本）；
+- 浅色细线为逐回合原始成本，深色粗线为 MA(10) 或 EMA；
 - 可选画基线均值虚线。
 
 用法::
@@ -55,6 +55,20 @@ def _ema(values, alpha: float = 0.2) -> list[float]:
     return out
 
 
+def _moving_average(values, window: int) -> list[float]:
+    """尾部滑动平均；前 window-1 个点用已有数据的均值。"""
+    out: list[float] = []
+    window = max(1, int(window))
+    for i, v in enumerate(values):
+        if v is None or not (v == v):
+            out.append(float("nan"))
+            continue
+        vals = [float(x) for x in values[max(0, i - window + 1):i + 1]
+                if x is not None and (x == x)]
+        out.append(sum(vals) / len(vals) if vals else float("nan"))
+    return out
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="plot total cost per episode")
     ap.add_argument("--run", required=True,
@@ -64,7 +78,9 @@ def main(argv=None):
     ap.add_argument("--baseline-mean", type=float, default=None,
                     help="基线均值虚线（万元/路径）")
     ap.add_argument("--smooth-alpha", type=float, default=0.2,
-                    help="EMA 平滑系数（0<alpha<=1）")
+                    help="EMA 平滑系数（0<alpha<=1；ma-window=0 时使用）")
+    ap.add_argument("--ma-window", type=int, default=10,
+                    help="尾部滑动平均窗口，默认 10；0 表示改用 EMA")
     args = ap.parse_args(argv)
     p = Path(args.run)
     if not p.is_absolute():
@@ -95,9 +111,15 @@ def main(argv=None):
 
     fig, ax = plt.subplots(1, 1, figsize=(10, 5.2), constrained_layout=True)
     ax.plot(episodes, cost, "-", color="tab:blue", lw=0.7, alpha=0.25,
-            label="total cost per episode")
-    ax.plot(episodes, _ema(cost, alpha), "-", color="tab:blue", lw=2.2,
-            label=f"EMA(α={alpha:g})")
+            label="total cost per episode (raw, unscaled)")
+    if args.ma_window > 0:
+        smooth = _moving_average(cost, args.ma_window)
+        smooth_label = f"MA(window={args.ma_window})"
+    else:
+        smooth = _ema(cost, alpha)
+        smooth_label = f"EMA(α={alpha:g})"
+    ax.plot(episodes, smooth, "-", color="tab:blue", lw=2.2,
+            label=smooth_label)
     if args.baseline_mean is not None:
         ax.axhline(args.baseline_mean, color="tab:red", ls="--", lw=1.3,
                    label=f"baseline mean ({args.baseline_mean:.1f})")
@@ -106,12 +128,6 @@ def main(argv=None):
     ax.set_ylabel("total cost (10k CNY / episode)")
     ax.grid(alpha=0.3)
     ax.legend(fontsize=9)
-    k = max(1, n // 10)
-    ax.text(0.01, 0.98,
-            f"first 10% mean: {sum(cost[:k]) / k:.1f}\n"
-            f"last 10% mean:  {sum(cost[-k:]) / k:.1f}",
-            transform=ax.transAxes, va="top", fontsize=9,
-            bbox=dict(facecolor="white", alpha=0.8, edgecolor="0.8"))
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=160)
     plt.close(fig)
