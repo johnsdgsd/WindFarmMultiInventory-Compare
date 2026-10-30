@@ -110,11 +110,13 @@ def _copt():
 
 class _SparseLP:
     def __init__(self, name: str, time_limit: float | None = None,
-                 solver: str = "copt", threads: int = 1):
+                 solver: str = "copt", threads: int = 1,
+                 presolve: int = -1):
         self.name = name
         self.time_limit = time_limit
         self.solver = str(solver)
         self.threads = int(threads)
+        self.presolve = int(presolve)
         self.lb: list[float] = []
         self.ub: list[float] = []
         self.c: list[float] = []
@@ -198,40 +200,52 @@ class _SparseLP:
         t0 = time.perf_counter()
         if self.solver == "copt":
             cp, COPT = _copt()
-            m = _COPT_ENV.createModel()
-            try:
-                m.setParam(COPT.Param.Logging, 0)
-                m.setParam(COPT.Param.Threads, int(self.threads))
-                if self.time_limit is not None:
-                    m.setParam(COPT.Param.TimeLimit,
-                               float(self.time_limit))
-                A, lhs, rhs = self._matrix()
-                lb = [float(v) for v in self.lb]
-                ub = [COPT.INFINITY if not np.isfinite(v) else float(v)
-                      for v in self.ub]
-                m.loadMatrix(np.asarray(self.c, dtype=float), A,
-                             lhs, rhs, lb, ub)
-                m.setObjSense(COPT.MINIMIZE)
-                m.solveLP()
-                status = m.status
-                if status != COPT.OPTIMAL:
-                    raise LPError(
-                        f"{self.name}: COPT 失败 status={status}",
-                        n_vars=n, n_eq=n_eq, n_le=n_le,
-                        solve_s=time.perf_counter() - t0)
-                if int(m.getAttr(COPT.Attr.HasLpSol)) != 1:
-                    raise LPError(
-                        f"{self.name}: COPT 无 LP 解", n_vars=n,
-                        n_eq=n_eq, n_le=n_le,
-                        solve_s=time.perf_counter() - t0)
-                x = np.asarray(m.getValues(), dtype=float)
-                fun = float(m.getAttr(COPT.Attr.LpObjVal))
-            finally:
+            A, lhs, rhs = self._matrix()
+            lb = [float(v) for v in self.lb]
+            ub = [COPT.INFINITY if not np.isfinite(v) else float(v)
+                  for v in self.ub]
+            # COPT auto presolve occasionally reports NUMERICAL (status=5)
+            # on degenerate two-stage LPs; retrying the same matrix with
+            # Presolve=0 solves them in <1 s (see probe_numeric.py).
+            trials = [int(self.presolve)]
+            if int(self.presolve) != 0:
+                trials.append(0)
+            statuses = []
+            x = None
+            fun = float("nan")
+            for k, presolve in enumerate(trials):
+                m = _COPT_ENV.createModel()
                 try:
-                    m.clear()
-                except Exception:
-                    pass
+                    m.setParam(COPT.Param.Logging, 0)
+                    m.setParam(COPT.Param.Threads, int(self.threads))
+                    if self.time_limit is not None:
+                        m.setParam(COPT.Param.TimeLimit,
+                                   float(self.time_limit))
+                    if presolve >= 0:
+                        m.setParam(COPT.Param.Presolve, int(presolve))
+                    m.loadMatrix(np.asarray(self.c, dtype=float), A,
+                                 lhs, rhs, lb, ub)
+                    m.setObjSense(COPT.MINIMIZE)
+                    m.solveLP()
+                    status = m.status
+                    statuses.append(int(status))
+                    if (status == COPT.OPTIMAL
+                            and int(m.getAttr(COPT.Attr.HasLpSol)) == 1):
+                        x = np.asarray(m.getValues(), dtype=float)
+                        fun = float(m.getAttr(COPT.Attr.LpObjVal))
+                        break
+                finally:
+                    try:
+                        m.clear()
+                    except Exception:
+                        pass
             solve_s = time.perf_counter() - t0
+            if x is None:
+                raise LPError(
+                    f"{self.name}: COPT 失败 status={statuses} "
+                    f"(presolve trials={trials})",
+                    n_vars=n, n_eq=n_eq, n_le=n_le, solve_s=solve_s,
+                    presolve=trials, statuses=statuses)
             if x.size != n:
                 raise LPError(
                     f"{self.name}: COPT 返回值数 {x.size} != {n}",
@@ -310,8 +324,10 @@ class TwoStageLP:
     """给定 t 期初状态 + 优化池切片，求解两阶段随机 LP。"""
 
     def __init__(self, prob, state: State, t: int, theta_window,
+                 window_len: int | None = None,
                  time_limit: float | None = None,
-                 solver: str = "copt", threads: int = 1):
+                 solver: str = "copt", threads: int = 1,
+                 presolve: int = -1):
         self.prob = prob
         self.t = int(t)
         self.T = int(prob.T)
@@ -321,7 +337,14 @@ class TwoStageLP:
         self.K = self.L - 1
         if not (1 <= self.t <= self.T):
             raise ValueError(f"滚动 LP 只支持 1<=t<=T；t={self.t}")
-        self.window = self.T - self.t + 1
+        if window_len is None:
+            self.t_end = self.T
+        else:
+            w = int(window_len)
+            if w < 1:
+                raise ValueError(f"window_len 必须 >=1，实际 {w}")
+            self.t_end = min(self.T, self.t + w - 1)
+        self.window = self.t_end - self.t + 1
         self.Nsc = int(np.asarray(theta_window).shape[0])
         self.theta = _check_theta(
             theta_window, self.Nsc, self.window, self.N_R, self.G)
@@ -343,6 +366,7 @@ class TwoStageLP:
         self.time_limit = time_limit
         self.solver = str(solver)
         self.threads = int(threads)
+        self.presolve = int(presolve)
         self.lp: _SparseLP | None = None
         self.qfirst: list[int] = []
         self.taufp: list[int] = []
@@ -382,7 +406,8 @@ class TwoStageLP:
         t0 = time.perf_counter()
         N_R, G, L, K = self.N_R, self.G, self.L, self.K
         lp = _SparseLP(f"two_stage_t{self.t}", self.time_limit,
-                       solver=self.solver, threads=self.threads)
+                       solver=self.solver, threads=self.threads,
+                       presolve=self.presolve)
         self.lp = lp
 
         # 第一阶段：tau_t（先调拨）和 q_t（再订货），均全情景共享
@@ -401,7 +426,7 @@ class TwoStageLP:
             for r in range(N_R)]
         self.qfirst = [
             lp.var(f"qfirst[{r}]", lb=0.0,
-                   ub=0.0 if self.t == self.T else float(self.Qmax[r]))
+                   ub=0.0 if self.t == self.t_end else float(self.Qmax[r]))
             for r in range(N_R)]
 
         # 第一阶段 tau 的确定性约束
@@ -430,7 +455,7 @@ class TwoStageLP:
 
         # 状态变量：t+1..T+1；t 期状态已知
         for s in range(self.Nsc):
-            for tau in range(self.t + 1, self.T + 2):
+            for tau in range(self.t + 1, self.t_end + 2):
                 sv = {
                     "I": [lp.var(f"I[{s},{tau},{r}]", 0.0,
                                  float(self.Imax[r]))
@@ -446,11 +471,11 @@ class TwoStageLP:
 
         # 当期决策：t..T
         for s in range(self.Nsc):
-            for tau in range(self.t, self.T + 1):
+            for tau in range(self.t, self.t_end + 1):
                 d = {
                     "q": (None if tau == self.t else
                           [lp.var(f"q[{s},{tau},{r}]", 0.0,
-                                  0.0 if tau == self.T
+                                  0.0 if tau == self.t_end
                                   else float(self.Qmax[r]))
                            for r in range(N_R)]),
                     "y": [[lp.var(f"y[{s},{tau},{r},{m}]", 0.0,
@@ -484,7 +509,7 @@ class TwoStageLP:
         weight = 1.0 / float(self.Nsc)
         const_total = 0.0
         for s in range(self.Nsc):
-            for tau in range(self.t, self.T + 1):
+            for tau in range(self.t, self.t_end + 1):
                 d = self.dec[(s, tau)]
                 w = tau - self.t
                 th = self.theta[s, w]
@@ -680,7 +705,8 @@ class RecourseLP:
 
     def __init__(self, prob, state: State, q_out, tau_in, F_new,
                  time_limit: float | None = None,
-                 solver: str = "copt", threads: int = 1):
+                 solver: str = "copt", threads: int = 1,
+                 presolve: int = -1):
         self.prob = prob
         self.N_R = int(prob.N_R)
         self.G = int(prob.G)
@@ -718,6 +744,7 @@ class RecourseLP:
         self.time_limit = time_limit
         self.solver = str(solver)
         self.threads = int(threads)
+        self.presolve = int(presolve)
         self.lp: _SparseLP | None = None
         self.stats: LPStats | None = None
         self.build_s = 0.0
@@ -726,7 +753,8 @@ class RecourseLP:
         t0 = time.perf_counter()
         N_R = self.N_R
         lp = _SparseLP("recourse", self.time_limit,
-                       solver=self.solver, threads=self.threads)
+                       solver=self.solver, threads=self.threads,
+                       presolve=self.presolve)
         self.lp = lp
         y = [[lp.var(f"y[{r},{m}]", 0.0,
                      float(min(self.N[r], self.Imax[m])))

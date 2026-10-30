@@ -42,6 +42,19 @@ if __name__ == "__main__":
                     help="按真实路径并行的线程数（缺省取策略配置）")
     ap.add_argument("--log-every", type=int, default=None,
                     help="每多少期写一次进度日志（缺省取策略配置）")
+    ap.add_argument("--window-len", type=int, default=None,
+                    help="滚动窗口 W；0/缺省表示剩余全时域")
+    ap.add_argument("--path-sample", default=None,
+                    choices=["first", "random"],
+                    help="真实路径子集：first 或 random（缺省取策略配置）")
+    ap.add_argument("--path-seed", type=int, default=None,
+                    help="random 路径抽样种子（缺省取策略配置）")
+    ap.add_argument("--path-offset", type=int, default=0,
+                    help="first 抽样的起始路径下标；用于全量分片，缺省 0")
+    ap.add_argument("--checkpoint-every", type=int, default=None,
+                    help="每多少期保存一次 checkpoint（缺省取策略配置）")
+    ap.add_argument("--resume", default=None,
+                    help="从已有结果目录的 checkpoint 继续运行")
     ap.add_argument("--solver", default=None, choices=["copt", "highs"],
                     help="LP 求解器（缺省 copt）")
     ap.add_argument("--time-limit", type=float, default=None,
@@ -52,6 +65,8 @@ if __name__ == "__main__":
                     help="N=smoke_n、M=smoke_m 的快速 smoke；目录带 _quick")
     ap.add_argument("--skip-audit", action="store_true",
                     help="跳过逐点审计（仅 smoke）")
+    ap.add_argument("--skip-index", action="store_true",
+                    help="不写 index.csv；分片并行时使用，合并后写一行")
     args = ap.parse_args()
 
     evaluate(
@@ -67,7 +82,14 @@ if __name__ == "__main__":
         threads=args.threads,
         workers=args.workers,
         log_every=args.log_every,
+        window_len=args.window_len,
+        path_sample=args.path_sample,
+        path_seed=args.path_seed,
+        path_offset=args.path_offset,
+        checkpoint_every=args.checkpoint_every,
+        resume_dir=args.resume,
         time_limit=args.time_limit,
         solver=args.solver,
         skip_audit=args.skip_audit,
+        skip_index=args.skip_index,
     )

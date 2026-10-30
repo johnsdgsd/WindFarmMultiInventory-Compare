@@ -10,6 +10,7 @@ except Exception:
     pass
 
 import csv
+import hashlib
 import json
 import os
 import time as _time
@@ -52,23 +53,25 @@ def load_rolling_config(project: Path, path: str | Path | None = None) -> dict:
     return data
 
 
-def _subset_base(base, m: int):
+def _subset_base(base, m: int, indices=None):
     """基线子集包装，供 behavior/terminal 函数复用。"""
     m = int(m)
+    idx = (np.arange(m, dtype=int) if indices is None
+           else np.asarray(indices, dtype=int).reshape(-1))
     return SimpleNamespace(
         P=m,
-        totals=np.asarray(base.totals[:m], dtype=float),
-        terms=np.asarray(base.terms[:m], dtype=float),
-        x_in=np.asarray(base.x_in[:m], dtype=float),
-        q=np.asarray(base.q[:m], dtype=float),
-        taup=np.asarray(base.taup[:m], dtype=float),
-        taum=np.asarray(base.taum[:m], dtype=float),
-        S_end=np.asarray(base.S_end[:m], dtype=float),
-        y=np.asarray(base.y[:m], dtype=float),
-        F=np.asarray(base.F[:m], dtype=float),
-        W_in=np.asarray(base.W_in[:m], dtype=float),
-        W_out=np.asarray(base.W_out[:m], dtype=float),
-        q0=lambda layout: np.asarray(base.q0(layout)[:m], dtype=float),
+        totals=np.asarray(base.totals[idx], dtype=float),
+        terms=np.asarray(base.terms[idx], dtype=float),
+        x_in=np.asarray(base.x_in[idx], dtype=float),
+        q=np.asarray(base.q[idx], dtype=float),
+        taup=np.asarray(base.taup[idx], dtype=float),
+        taum=np.asarray(base.taum[idx], dtype=float),
+        S_end=np.asarray(base.S_end[idx], dtype=float),
+        y=np.asarray(base.y[idx], dtype=float),
+        F=np.asarray(base.F[idx], dtype=float),
+        W_in=np.asarray(base.W_in[idx], dtype=float),
+        W_out=np.asarray(base.W_out[idx], dtype=float),
+        q0=lambda layout: np.asarray(base.q0(layout)[idx], dtype=float),
     )
 
 
@@ -167,20 +170,22 @@ def _summary_md(ctx: dict) -> str:
         "",
         f"- 优化池：N={ctx['N']} 条独立 Theta 路径，seed_opt={ctx['seed_opt']}，"
         f"pool_hash=`{ctx['pool_hash']}`，shape={ctx['pool_shape']}。",
-        f"- 窗口：W=T-t+1（剩余全部时域）；终端 V_{{T+1}}=0，无终端近似。",
+        f"- 窗口：{ctx['window_label']}；窗口末端 V=0，无终端近似。",
         "- 状态：`I,n,o1..o(L-1)`；W=N−Σn 由状态导出，不存储。",
         "- 每期只有一个订货 q_t；purchase_timing=`current_q`，"
         "采购成本按当期 C q_t；没有 q_in/q_out。",
         f"- 第一阶段只有 q_t；其余 q/y/tau/S_end/I/n/N/o 均为情景追索。",
         f"- t 期 Theta_t 作为随机变量；真实 Theta_t 只在订货后由仿真观测，"
         f"不进入 order。",
-        f"- 真实路径：取基线 npz 的 scene 前 M={ctx['M']} 条，"
+        f"- 真实路径：基线 npz 的 {ctx['path_sample']} 抽样 M={ctx['M']} 条，"
+        f"path_seed={ctx['path_seed']}，indices_hash=`{ctx['path_indices_hash']}`，"
         f"subset_hash=`{ctx['scene_hash']}`；与优化池种子独立；不重新采样。",
         f"- 初始 I0/o0/n0 取 problem_data；滚动没有独立的 q0 状态。"
         f"基线 q_in 均值 {fmt(q0_mean)}，配对差包含初始在途/订单差异。",
-        "- 状态转移：`I_{t+1}=S_end+tau`，`o_{l,t+1}=o_{l+1,t}`，"
-        "`o_{L-1,t+1}=q_t`；容量为每期 "
-        "`I_t+Σo_t+q_t<=Imax` 和转移后 `I_{t+1}+Σo_{t+1}<=Imax`。",
+        "- 状态转移：`S_end=I_t+tau_t-Σy+o1`，`I_{t+1}=S_end`；"
+        "`o_{l,t+1}=o_{l+1,t}`，`o_{L-1,t+1}=q_t`；容量为每期 "
+        "`I_t+tau_t+Σo_t+q_t<=Imax` 和转移后 "
+        "`I_{t+1}+Σo_{t+1}<=Imax`。",
         "- 主动调拨由两个 LP 直接优化 tau（不是 ss_static 的门限规则）。",
         f"- solver={ctx['solver']}，threads={ctx['threads']}，"
         f"workers={ctx['workers']}；"
@@ -398,9 +403,16 @@ def evaluate(
     threads: int | None = None,
     workers: int | None = None,
     log_every: int | None = None,
+    window_len: int | None = None,
+    path_sample: str | None = None,
+    path_seed: int | None = None,
+    path_offset: int = 0,
+    checkpoint_every: int | None = None,
+    resume_dir: str | Path | None = None,
     time_limit: float | None = None,
     solver: str | None = None,
     skip_audit: bool = False,
+    skip_index: bool = False,
 ) -> Path:
     project = Path(project).resolve()
     pcfg_path = (Path(policy_config) if policy_config is not None
@@ -425,6 +437,20 @@ def evaluate(
                   else pol_cfg.get("workers", 1))
     log_every = int(log_every if log_every is not None
                     else pol_cfg.get("log_every", 1))
+    wl = (window_len if window_len is not None
+          else pol_cfg.get("window_len", 0))
+    window_len = None if int(wl) <= 0 else int(wl)
+    path_sample = str(path_sample if path_sample is not None
+                      else pol_cfg.get("path_sample", "random"))
+    if path_sample not in ("first", "random"):
+        raise ValueError(f"path_sample 只支持 first/random，实际 {path_sample}")
+    path_seed = int(path_seed if path_seed is not None
+                    else pol_cfg.get("path_seed", 2027))
+    path_offset = int(path_offset)
+    checkpoint_every = int(checkpoint_every if checkpoint_every is not None
+                           else pol_cfg.get("checkpoint_every", 5))
+    checkpoint_every = max(1, checkpoint_every)
+    resume_dir = (None if resume_dir is None else Path(resume_dir))
     time_limit = (float(time_limit) if time_limit is not None
                   else float(pol_cfg.get("time_limit", 0.0)))
     solver = str(solver if solver is not None
@@ -441,16 +467,33 @@ def evaluate(
     base = load_baseline(cfg, prob)
     if M > base.P:
         raise ValueError(f"M={M} > 基线路径数 {base.P}")
-    rp = real_paths_from_baseline(base, M)
+    if path_sample == "random":
+        if path_offset != 0:
+            raise ValueError("random 抽样不支持 path_offset")
+        rng = np.random.default_rng(path_seed)
+        path_indices = np.sort(rng.choice(base.P, size=M, replace=False))
+    else:
+        start = int(path_offset)
+        if start < 0 or start + M > base.P:
+            raise ValueError(
+                f"path_offset={start}, M={M} 超出基线路径数 {base.P}")
+        path_indices = np.arange(start, start + M, dtype=int)
+    rp = real_paths_from_baseline(base, M, indices=path_indices)
     opt = make_opt_pool(prob, N, seed)
 
     # 结果目录在仿真前创建；失败/中断也保留日志与 run.json
     out_tag = tag if tag is not None else out_cfg["tag"]
     if quick:
         out_tag = f"{out_tag}_quick"
-    result_dir = Path(make_result_dir(
-        archive_root if archive_root is not None else project,
-        "rolling_horizon", out_tag))
+    if resume_dir is None:
+        result_dir = Path(make_result_dir(
+            archive_root if archive_root is not None else project,
+            "rolling_horizon", out_tag))
+    else:
+        result_dir = (resume_dir if resume_dir.is_absolute()
+                      else project / resume_dir)
+        if not result_dir.is_dir():
+            raise FileNotFoundError(f"resume 目录不存在: {result_dir}")
     copy_configs(result_dir, cfg, project, policy_path=pcfg_path)
     run_log = open(result_dir / "run.log", "a", encoding="utf-8")
     progress_log = open(result_dir / "progress.log", "a", encoding="utf-8")
@@ -470,6 +513,124 @@ def evaluate(
                       f"{msg}\n")
         run_log.flush()
 
+    checkpoint_npz = result_dir / "checkpoint.npz"
+    checkpoint_json = result_dir / "checkpoint.json"
+    lp_csv = result_dir / "lp_stats.csv"
+    lp_cols = ["path", "t", "window", "n_scen", "n_vars", "n_eq", "n_le",
+               "build_s", "solve_s", "objective", "solver", "status"]
+    lp_state = {"written_t": 0}
+    policy = None
+
+    def flush_lp_stats():
+        """Append newly solved periods so a resume keeps complete LP stats."""
+        if policy is None:
+            return
+        rows = [r for r in policy.lp_stats
+                if int(r["t"]) > int(lp_state["written_t"])]
+        if not rows:
+            return
+        new = not lp_csv.is_file() or lp_csv.stat().st_size == 0
+        with open(lp_csv, "a", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            if new:
+                w.writerow(lp_cols)
+            for r in rows:
+                w.writerow([r["path"], r["t"], r["window"], r["n_scen"],
+                            r["n_vars"], r["n_eq"], r["n_le"],
+                            f"{r['build_s']:.6f}", f"{r['solve_s']:.6f}",
+                            f"{r['objective']:.6f}", r["solver"],
+                            r["status"]])
+        lp_state["written_t"] = max(int(r["t"]) for r in rows)
+
+    def load_lp_stats():
+        """Read partial lp_stats.csv from a previous attempt."""
+        if not lp_csv.is_file():
+            return
+        loaded = []
+        with open(lp_csv, newline="", encoding="utf-8") as f:
+            for r in csv.DictReader(f):
+                try:
+                    loaded.append({
+                        "path": int(r["path"]), "t": int(r["t"]),
+                        "window": int(r["window"]),
+                        "n_scen": int(r["n_scen"]),
+                        "n_vars": int(r["n_vars"]),
+                        "n_eq": int(r["n_eq"]),
+                        "n_le": int(r["n_le"]),
+                        "build_s": float(r["build_s"]),
+                        "solve_s": float(r["solve_s"]),
+                        "objective": float(r["objective"]),
+                        "solver": r["solver"], "status": r["status"],
+                    })
+                except (KeyError, TypeError, ValueError):
+                    break
+        policy.lp_stats = loaded
+        lp_state["written_t"] = max(
+            (int(r["t"]) for r in loaded), default=0)
+        log(f"载入已有 lp_stats：{len(loaded)} 行，"
+            f"t<={lp_state['written_t']}")
+
+    def save_checkpoint(t, I_ck, o_ck, n_ck, tot_ck, terms_ck, arr_ck):
+        if (int(t) % checkpoint_every != 0 and int(t) != int(prob.T)):
+            return
+        payload = dict(arr_ck) if arr_ck else {}
+        payload.update({
+            "I": np.asarray(I_ck, dtype=float),
+            "o": np.asarray(o_ck, dtype=float),
+            "n": np.asarray(n_ck, dtype=float),
+            "totals": np.asarray(tot_ck, dtype=float),
+            "term_totals": np.asarray(terms_ck, dtype=float),
+        })
+        tmp = result_dir / "checkpoint_tmp.npz"
+        np.savez_compressed(tmp, **payload)
+        os.replace(tmp, checkpoint_npz)
+        write_json(checkpoint_json, {
+            "t": int(t), "T": int(prob.T), "N": int(N), "M": int(M),
+            "seed_opt": int(seed),
+            "pool_hash": opt["pool_hash"], "scene_hash": rp["scene_hash"],
+            "path_sample": path_sample, "path_seed": int(path_seed),
+            "path_offset": int(path_offset),
+            "path_indices": [int(i) for i in rp["indices"]],
+            "window_len": window_len,
+            "config": str(cfg.config_path),
+            "policy_config": str(pcfg_path),
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+        })
+        log(f"checkpoint t={int(t)}/{prob.T} -> {checkpoint_npz.name}")
+        flush_lp_stats()
+
+    resume_data = None
+    resume_meta = None
+    if resume_dir is not None:
+        if not checkpoint_npz.is_file() or not checkpoint_json.is_file():
+            raise FileNotFoundError(
+                f"resume 需要 {checkpoint_npz.name} 和 {checkpoint_json.name}")
+        resume_meta = json.loads(checkpoint_json.read_text(encoding="utf-8"))
+        resume_data = np.load(checkpoint_npz, allow_pickle=False)
+        checks = {
+            "N": int(N), "M": int(M), "seed_opt": int(seed),
+            "T": int(prob.T),
+        }
+        for k, v in checks.items():
+            if int(resume_meta.get(k, -1)) != v:
+                raise ValueError(
+                    f"断点 {k}={resume_meta.get(k)} 与当前 {v} 不一致")
+        if int(resume_meta.get("window_len", -1) if resume_meta.get(
+                "window_len") is not None else -1) != (
+                    -1 if window_len is None else int(window_len)):
+            raise ValueError("断点 window_len 与当前不一致")
+        if resume_meta.get("pool_hash") != opt["pool_hash"]:
+            raise ValueError("断点优化池 hash 与当前不一致")
+        if resume_meta.get("scene_hash") != rp["scene_hash"]:
+            raise ValueError("断点真实路径 subset hash 与当前不一致")
+        if int(resume_meta.get("path_offset", 0)) != int(path_offset):
+            raise ValueError("断点 path_offset 与当前不一致")
+        old_idx = np.asarray(resume_meta.get("path_indices", []),
+                             dtype=int)
+        if not np.array_equal(old_idx, np.asarray(rp["indices"], dtype=int)):
+            raise ValueError("断点 path_indices 与当前不一致")
+        log(f"从断点恢复：t={resume_meta['t']}")
+
     write_json(result_dir / "run.json", {
         "status": "running",
         "started_at": datetime.now().isoformat(timespec="seconds"),
@@ -480,6 +641,9 @@ def evaluate(
         "N": int(N), "M": int(M), "seed_opt": int(seed),
         "solver": solver, "threads": int(threads),
         "workers": int(workers),
+        "path_sample": path_sample, "path_seed": int(path_seed),
+        "path_offset": int(path_offset),
+        "window_len": window_len,
     })
     log(f"开始滚动仿真：N={N} M={M} seed_opt={seed} "
         f"workers={workers} threads={threads} solver={solver}")
@@ -488,6 +652,7 @@ def evaluate(
     opts.update({
         "solver": solver, "threads": threads, "workers": workers,
         "log_every": log_every, "verbose": True,
+        "window_len": window_len,
         "time_limit": time_limit,
     })
     policy = RollingHorizonPolicy(
@@ -498,8 +663,31 @@ def evaluate(
     sim = Simulator(prob)
     t_start = datetime.now()
     t0 = _time.perf_counter()
+    if resume_data is not None:
+        start_t = int(resume_meta["t"]) + 1
+        init_I = np.asarray(resume_data["I"], dtype=float)
+        init_o = np.asarray(resume_data["o"], dtype=float)
+        init_n = np.asarray(resume_data["n"], dtype=float)
+        init_totals = np.asarray(resume_data["totals"], dtype=float)
+        init_terms = np.asarray(resume_data["term_totals"], dtype=float)
+        loaded_arrays = {k: np.asarray(resume_data[k])
+                         for k in resume_data.files}
+        # Windows: np.load keeps checkpoint.npz open; close it before the
+        # first os.replace(checkpoint_tmp.npz, checkpoint.npz).
+        resume_data.close()
+        load_lp_stats()
+        log(f"resume start_t={start_t}")
+    else:
+        start_t = 1
+        init_I = init_o = init_n = None
+        init_totals = init_terms = None
+        loaded_arrays = None
     try:
-        res = sim.simulate(policy, rp["scene"], record=True)
+        res = sim.simulate(
+            policy, rp["scene"], record=True, start_t=start_t,
+            init_I=init_I, init_o=init_o, init_n=init_n,
+            totals=init_totals, term_totals=init_terms,
+            arrays=loaded_arrays, checkpoint_cb=save_checkpoint)
         wall_s = _time.perf_counter() - t0
         t_end = datetime.now()
         if skip_audit:
@@ -524,6 +712,9 @@ def evaluate(
             "N": int(N), "M": int(M), "seed_opt": int(seed),
             "solver": solver, "threads": int(threads),
             "workers": int(workers),
+            "path_sample": path_sample, "path_seed": int(path_seed),
+            "path_offset": int(path_offset),
+            "window_len": window_len,
             "error": str(exc),
             "lp_failures": list(policy.lp_failures),
             "lp": _lp_summary(policy),
@@ -537,7 +728,7 @@ def evaluate(
     ps = paired_stats(res.totals, rp["totals"])
     terms = term_stats(res.arrays["terms"], rp["terms"], names=TERM_NAMES)
     pb = behavior_stats(prob, res)
-    base_sub = _subset_base(base, M)
+    base_sub = _subset_base(base, M, indices=rp["indices"])
     bb = baseline_behavior(prob, base_sub)
     tp = time_profile(res.arrays["terms"], rp["terms"])
     ts = terminal_sensitivity(prob, res, base_sub)
@@ -598,6 +789,14 @@ def evaluate(
         "M": int(M), "N": int(N), "seed_opt": int(seed),
         "pool_hash": pool_hash, "pool_shape": list(opt["pool"].shape),
         "scene_hash": scene_hash,
+        "path_sample": path_sample, "path_seed": int(path_seed),
+        "path_offset": int(path_offset),
+        "path_indices": [int(i) for i in rp["indices"][:20]],
+        "path_indices_hash": hashlib.sha256(
+            np.asarray(rp["indices"], dtype=np.int64).tobytes()).hexdigest(),
+        "window_len": window_len,
+        "window_label": ("full_remaining" if window_len is None
+                         else f"fixed_{window_len}"),
         "solver": solver, "threads": int(threads),
         "workers": int(workers), "log_every": int(log_every),
         "tol": float(cfg.tol), "state_tol": float(cfg.state_tol),
@@ -622,7 +821,12 @@ def evaluate(
             "scene_hash": scene_hash,
             "state": "I,n,o1..o(L-1)",
             "purchase_timing": "current_q",
-            "window": "full_remaining",
+            "window": ("full_remaining" if window_len is None
+                       else f"fixed_{window_len}"),
+            "window_len": window_len,
+            "path_sample": path_sample, "path_seed": int(path_seed),
+            "path_offset": int(path_offset),
+            "path_indices_hash": ctx["path_indices_hash"],
             "terminal": "zero",
             "capacity_side": "period_and_next",
             "solver": solver, "threads": int(threads),
@@ -645,7 +849,13 @@ def evaluate(
             "pool_hash": pool_hash, "scene_hash": scene_hash,
             "state": "I,n,o1..o(L-1)",
             "purchase_timing": "current_q",
-            "window": "full_remaining", "terminal": "zero",
+            "window": ("full_remaining" if window_len is None
+                       else f"fixed_{window_len}"),
+            "window_len": window_len,
+            "path_sample": path_sample, "path_seed": int(path_seed),
+            "path_offset": int(path_offset),
+            "path_indices_hash": ctx["path_indices_hash"],
+            "terminal": "zero",
             "capacity_side": "period_and_next",
             "solver": solver, "threads": int(threads),
             "workers": int(workers),
@@ -677,6 +887,8 @@ def evaluate(
             "baseline_subset_mean": base_sub_mean,
             "state": "I,n,o1..o(L-1)",
             "purchase_timing": "current_q",
+            "path_sample": path_sample, "path_seed": int(path_seed),
+            "path_offset": int(path_offset),
             "solver": solver, "threads": int(threads),
             "capacity_side": "period_and_next",
             "workers": int(workers),
@@ -696,7 +908,11 @@ def evaluate(
         "wall_s": float(wall_s),
     })
     if not skip_audit:
-        save_sim_npz(result_dir, res, M)
+        sim_path = result_dir / f"sim_{M}paths.npz"
+        if sim_path.is_file():
+            log(f"保留已有 {sim_path.name}（resume 不覆盖）")
+        else:
+            save_sim_npz(result_dir, res, M)
     with open(result_dir / "lp_stats.csv", "w", newline="",
               encoding="utf-8") as f:
         w = csv.writer(f)
@@ -730,6 +946,9 @@ def evaluate(
         "capacity_side": "period_and_next",
         "solver": solver, "threads": int(threads),
         "workers": int(workers),
+        "path_sample": path_sample, "path_seed": int(path_seed),
+        "path_offset": int(path_offset),
+        "window_len": window_len,
         "policy_mean": ps["policy_mean"],
         "baseline_subset_mean": base_sub_mean,
         "baseline_full_mean": base_full_mean,
@@ -741,24 +960,25 @@ def evaluate(
         "lp": lp,
     })
 
-    # append-only index
-    index = result_dir.parent / "index.csv"
-    new = not index.is_file()
-    with open(index, "a", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
-        if new:
-            w.writerow(["created_at", "tag", "N", "M", "seed_opt",
-                        "policy_mean", "baseline_subset_mean",
-                        "baseline_full_mean", "diff_mean", "rel_diff_pct",
-                        "t", "win_rate", "audit_pass", "solver",
-                        "wall_s", "result_dir"])
-        w.writerow([ctx["created_at"], result_dir.name, N, M, seed,
-                    f"{ps['policy_mean']:.6f}", f"{base_sub_mean:.6f}",
-                    f"{base_full_mean:.6f}", f"{ps['diff_mean']:.6f}",
-                    f"{ps['rel_diff_pct']:.6f}", f"{ps['t']:.6f}",
-                    f"{ps['win_rate_policy_lower']:.6f}",
-                    int(not bool(bad)), solver, f"{wall_s:.3f}",
-                    str(result_dir)])
+    # append-only index (shards may skip; merged run writes one row)
+    if not skip_index:
+        index = result_dir.parent / "index.csv"
+        new = not index.is_file()
+        with open(index, "a", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            if new:
+                w.writerow(["created_at", "tag", "N", "M", "seed_opt",
+                            "policy_mean", "baseline_subset_mean",
+                            "baseline_full_mean", "diff_mean", "rel_diff_pct",
+                            "t", "win_rate", "audit_pass", "solver",
+                            "wall_s", "result_dir"])
+            w.writerow([ctx["created_at"], result_dir.name, N, M, seed,
+                        f"{ps['policy_mean']:.6f}", f"{base_sub_mean:.6f}",
+                        f"{base_full_mean:.6f}", f"{ps['diff_mean']:.6f}",
+                        f"{ps['rel_diff_pct']:.6f}", f"{ps['t']:.6f}",
+                        f"{ps['win_rate_policy_lower']:.6f}",
+                        int(not bool(bad)), solver, f"{wall_s:.3f}",
+                        str(result_dir)])
 
     print(f"[rolling] 结果目录: {result_dir}")
     print(f"[rolling] 滚动均值 {ps['policy_mean']:.4f} vs 基线子集 "

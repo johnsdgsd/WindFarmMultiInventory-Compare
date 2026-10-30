@@ -234,7 +234,10 @@ class Simulator:
             terms=terms, cost=cost,
             N_counts=N_counts, tau=tau, taup=taup, taum=taum)
 
-    def simulate(self, policy, scene_paths, record: bool = False) -> SimulationResult:
+    def simulate(self, policy, scene_paths, record: bool = False, *,
+                 start_t: int = 1, init_I=None, init_o=None, init_n=None,
+                 totals=None, term_totals=None, arrays=None,
+                 checkpoint_cb=None) -> SimulationResult:
         scene_paths = np.asarray(scene_paths)
         if scene_paths.ndim != 2 or scene_paths.shape[1] != self.T:
             raise ValueError(f"scene_paths shape 必须是 (P,{self.T})，实际 {scene_paths.shape}")
@@ -247,12 +250,32 @@ class Simulator:
             raise ValueError("至少 1 条路径")
         if int(policy.T) != self.T or int(policy.N_R) != self.N_R:
             raise ValueError("policy 与 prob 的 T/N_R 不一致")
+        start_t = int(start_t)
+        if not (1 <= start_t <= self.T + 1):
+            raise ValueError(f"start_t={start_t} 越界")
 
-        I = np.tile(self.I0[None, :], (P, 1))
-        o = np.tile(self.o0[None, :, :], (P, 1, 1))
-        n = np.tile(self.n0[None, :, :], (P, 1, 1))
+        if start_t == 1:
+            I = np.tile(self.I0[None, :], (P, 1))
+            o = np.tile(self.o0[None, :, :], (P, 1, 1))
+            n = np.tile(self.n0[None, :, :], (P, 1, 1))
+            running_totals = np.zeros(P, dtype=float)
+            running_terms = np.zeros((P, 5), dtype=float)
+        else:
+            if init_I is None or init_o is None or init_n is None:
+                raise ValueError("断点续跑需要 init_I/init_o/init_n")
+            I = np.asarray(init_I, dtype=float).reshape(P, self.N_R).copy()
+            o = np.asarray(init_o, dtype=float).reshape(
+                P, self.K, self.N_R).copy()
+            n = np.asarray(init_n, dtype=float).reshape(
+                P, self.N_R, self.G).copy()
+            running_totals = (np.zeros(P, dtype=float) if totals is None
+                              else np.asarray(totals, dtype=float).copy())
+            running_terms = (np.zeros((P, 5), dtype=float)
+                             if term_totals is None
+                             else np.asarray(term_totals, dtype=float).copy())
         q0 = np.zeros((P, self.N_R), dtype=float)
 
+        loaded_arrays = arrays
         arrays: dict = {}
         if record:
             arrays = {
@@ -277,9 +300,15 @@ class Simulator:
                 "scene": np.asarray(scene_paths, dtype=np.int16).copy(),
             }
 
-        totals = np.zeros(P, dtype=float)
-        term_totals = np.zeros((P, 5), dtype=float)
-        for t in range(1, self.T + 1):
+        if record and loaded_arrays is not None:
+            # Keep only the standard recorded arrays; checkpoint payloads
+            # also contain I/o/n/totals/term_totals, which must not leak
+            # into sim_<M>paths.npz.
+            arrays = {k: np.asarray(loaded_arrays[k], dtype=arrays[k].dtype)
+                      for k in arrays if k in loaded_arrays}
+        totals = running_totals
+        term_totals = running_terms
+        for t in range(start_t, self.T + 1):
             theta = self.theta_pool[scene_paths[:, t - 1]]
             st = self.step(t, I, o, n, theta, policy)
             totals += st.cost
@@ -315,6 +344,8 @@ class Simulator:
             I = st.I_out
             o = st.o_next
             n = st.n_out
+            if checkpoint_cb is not None:
+                checkpoint_cb(t, I, o, n, totals, term_totals, arrays)
 
         if record:
             arrays["totals"] = totals.copy()

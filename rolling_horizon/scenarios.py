@@ -127,23 +127,35 @@ def pool_slice(pool: np.ndarray, t: int) -> np.ndarray:
     return pool[:, t - 1:, :, :, :]
 
 
-def real_paths_from_baseline(base, m_paths: int) -> dict:
-    """取基线 npz 的前 M 条真实路径，用于配对评估。
+def real_paths_from_baseline(base, m_paths: int,
+                             indices=None) -> dict:
+    """取基线真实路径子集，用于配对评估。
 
-    同时返回对应的基线 totals/terms 子集；scene 不重新生成。
+    默认前 M 条；传 indices 时使用给定下标（例如固定随机样本）。
+    scene 不重新生成，baseline totals/terms 与下标一一对应。
     """
     M = int(m_paths)
     if M < 1:
         raise ValueError("real_paths 必须为正")
     if M > base.P:
         raise ValueError(f"real_paths={M} > 基线路径数 {base.P}")
-    scene = np.ascontiguousarray(base.scene[:M])
+    if indices is None:
+        idx = np.arange(M, dtype=int)
+    else:
+        idx = np.asarray(indices, dtype=int).reshape(-1)
+        if idx.size != M:
+            raise ValueError(f"indices 数 {idx.size} != M={M}")
+        if np.any(idx < 0) or np.any(idx >= base.P):
+            raise ValueError("indices 越界")
+        if np.unique(idx).size != idx.size:
+            raise ValueError("indices 不得重复")
+    scene = np.ascontiguousarray(base.scene[idx])
     return {
         "scene": scene,
-        "totals": np.asarray(base.totals[:M], dtype=float).copy(),
-        "terms": np.asarray(base.terms[:M], dtype=float).copy(),
+        "totals": np.asarray(base.totals[idx], dtype=float).copy(),
+        "terms": np.asarray(base.terms[idx], dtype=float).copy(),
         "M": M,
-        "indices": np.arange(M, dtype=int),
+        "indices": idx,
         "scene_hash": sha256_array(scene),
         "baseline_full_mean": float(base.mean),
         "baseline_full_P": int(base.P),

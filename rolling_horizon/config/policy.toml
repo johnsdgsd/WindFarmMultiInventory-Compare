@@ -4,6 +4,7 @@
 solver = "copt"              # copt / highs
 fallback_solver = "highs"    # COPT 数值失败(status=5)时自动切 HiGHS
 threads = 4                  # 每个 LP 的 COPT 线程
+copt_presolve = -1           # -1=auto；status=5 时自动用 Presolve=0 重试
 workers = 4                  # 按真实路径并行求解的线程数
 log_every = 1                # 每多少期写一次进度日志
 verbose = true               # 每期打印进度
@@ -11,12 +12,15 @@ time_limit = 0.0             # 秒；<=0 表示不限制
 active = "lp"                # 主动调拨由 LP 优化（不是 ss_static 门限规则）
 n_scenarios = 10             # 优化池情景数 N
 seed_opt = 2027              # 优化池种子（与基线 300 场景池独立）
-real_paths = 50              # 样本外真实路径数 M（取基线 scene 前 M 条）
+real_paths = 50              # 样本外真实路径数 M
+path_sample = "random"       # first / random；random 为公平抽样
+path_seed = 2027             # random 抽样的固定种子
+checkpoint_every = 5         # 每 5 期保存一次 checkpoint；--resume 可续跑
 state = "I,n,o1..o(L-1)"     # 状态定义
 purchase_timing = "current_q"  # 采购成本按当期 q 计
 capacity_side = "period_and_next"  # I_t+Σo_t+q_t<=Imax 且 I_{t+1}+Σo_{t+1}<=Imax
-window = "full_remaining"    # W = T-t+1
-terminal = "zero"            # V_{T+1}=0，无终端近似
+window_len = 0               # 0 = 剩余全时域；正整数 = 固定滚动窗口 W
+terminal = "zero"            # 窗口末端 V=0，无终端近似
 smoke_n = 2                  # --quick 用
 smoke_m = 2
 

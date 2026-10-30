@@ -38,7 +38,11 @@ class RollingHorizonPolicy:
         self.solver = str(self.options.get("solver", "copt"))
         fb = str(self.options.get("fallback_solver", "highs"))
         self.fallback_solver = None if fb.lower() in ("", "none") else fb
+        wl = self.options.get("window_len", None)
+        self.window_len = (None if wl is None or int(wl) <= 0
+                           else int(wl))
         self.threads = int(self.options.get("threads", 1))
+        self.presolve = int(self.options.get("copt_presolve", -1))
         self.workers = max(1, int(self.options.get("workers", 1)))
         tl = self.options.get("time_limit", None)
         self.time_limit = (None if tl is None or float(tl) <= 0.0
@@ -54,6 +58,7 @@ class RollingHorizonPolicy:
             raise ValueError("滚动时域只实现 active='lp'（LP 优化 tau）")
 
         self._t = None
+        self._t_end = None
         self._I = None
         self._o = None
         self._n = None
@@ -76,8 +81,10 @@ class RollingHorizonPolicy:
         try:
             lp = TwoStageLP(
                 self.prob, st, self._t, theta_win,
+                window_len=self.window_len,
                 time_limit=self.time_limit,
-                solver=self.solver, threads=self.threads)
+                solver=self.solver, threads=self.threads,
+                presolve=self.presolve)
             return p, lp.solve()
         except LPError as first:
             if self.fallback_solver is None or self.solver == self.fallback_solver:
@@ -88,8 +95,10 @@ class RollingHorizonPolicy:
                 f"切 {self.fallback_solver}: {first}")
             lp2 = TwoStageLP(
                 self.prob, st, self._t, theta_win,
+                window_len=self.window_len,
                 time_limit=self.time_limit,
-                solver=self.fallback_solver, threads=self.threads)
+                solver=self.fallback_solver, threads=self.threads,
+                presolve=self.presolve)
             try:
                 return p, lp2.solve()
             except Exception as second:
@@ -116,7 +125,10 @@ class RollingHorizonPolicy:
         self._t = t
         qout = np.zeros((P, self.N_R), dtype=float)
         tauout = np.zeros((P, self.N_R), dtype=float)
-        theta_win = self.pool[:, t - 1:, :, :, :]
+        t_end = (self.T if self.window_len is None
+                 else min(self.T, t + self.window_len - 1))
+        self._t_end = t_end
+        theta_win = self.pool[:, t - 1:t_end, :, :, :]
         states = [State(I[p], o[p], n[p]) for p in range(P)]
         results = {}
         failures = []
@@ -197,7 +209,8 @@ class RollingHorizonPolicy:
             lp = RecourseLP(
                 self.prob, st, self._qout[p], self._tau_first[p], F_new,
                 time_limit=self.time_limit,
-                solver=self.solver, threads=self.threads)
+                solver=self.solver, threads=self.threads,
+                presolve=self.presolve)
             return p, lp.solve()
         except LPError as first:
             if self.fallback_solver is None or self.solver == self.fallback_solver:
@@ -206,7 +219,8 @@ class RollingHorizonPolicy:
             lp2 = RecourseLP(
                 self.prob, st, self._qout[p], self._tau_first[p], F_new,
                 time_limit=self.time_limit,
-                solver=self.fallback_solver, threads=self.threads)
+                solver=self.fallback_solver, threads=self.threads,
+                presolve=self.presolve)
             try:
                 return p, lp2.solve()
             except Exception as second:
@@ -305,9 +319,12 @@ class RollingHorizonPolicy:
             "fallback_solver": self.fallback_solver,
             "fallback_calls": int(self._fallback_calls),
             "threads": self.threads,
+            "copt_presolve": int(self.presolve),
             "workers": self.workers,
             "time_limit": self.time_limit,
-            "window": "full_remaining",
+            "window": ("full_remaining" if self.window_len is None
+                       else f"fixed_{self.window_len}"),
+            "window_len": self.window_len,
             "terminal": "zero",
             "active": self.active,
             "n_lp_calls": int(self._total_lp_solves),
