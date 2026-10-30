@@ -117,7 +117,6 @@ class SSEvaluator:
         self.Imax = np.asarray(prob.Imax, dtype=float)
         self.term_names = TERM_NAMES
         self.active = bool(self.options.get("active_transfer", False))
-        self.active_target = float(self.options.get("active_target", 5.0))
 
     def check_theta(self, theta) -> SSParams:
         t = np.asarray(theta, dtype=float).reshape(-1)
@@ -136,9 +135,8 @@ class SSEvaluator:
         h = None
         if self.active:
             h = t[2 * self.N_R:]
-            if np.any(h < self.active_target - 1e-9):
-                raise ValueError(
-                    f"active threshold h 必须 ≥ target={self.active_target}: {h}")
+            if np.any(h < -1e-9):
+                raise ValueError(f"active threshold h 必须 ≥0: {h}")
             if np.any(h > self.Imax + 1e-9):
                 raise ValueError(f"active threshold h 超过 Imax: {h}")
         return SSParams(s, S, h)

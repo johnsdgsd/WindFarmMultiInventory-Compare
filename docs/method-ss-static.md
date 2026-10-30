@@ -721,24 +721,25 @@ COMPARE_CONFIG=config/compare_T240.toml \
 
 ### 14.1 定位
 
-主基准 mode 0 没有主动调拨。本轮新增一个**可插拔**的主动调拨规则
-`ThresholdBalanceRule`，并把**每仓门限 \(h_r\) 作为优化参数**，
+主基准 mode 0 没有主动调拨。新增一个**可插拔**的主动调拨规则
+`ThresholdBalanceRule`，并把**每仓保留水平 \(h_r\) 作为优化参数**，
 与 \((s_r,S_r)\) 一起搜索。no-active 仍是 2K 维度，active 是 3K 维度：
 
 \[
 \theta=[s_1,\dots,s_K,S_1,\dots,S_K,h_1,\dots,h_K],
 \qquad
-h_r\in[T,I^{\max}_r].
+h_r\in[0,I^{\max}_r].
 \]
 
-`active_transfer=false` 时 \(h\) 不参与；旧 policy JSON 没有 active 键时
-默认 mode 0。
+\(h_r\) 是**源仓保留下限/触发线**，不是调入目标 \(T\)；调入目标固定
+\(T=5\)。`active_transfer=false` 时 \(h\) 不参与；旧 policy JSON 没有
+active 键时默认 mode 0。
 
 ### 14.2 规则
 
-目标库存 \(T=5\)（每仓固定，可配置）。被动履约后 \(X_r=S^{end}_r\)：
+调入目标 \(T=5\)（固定，可配置）。被动履约后 \(X_r=S^{end}_r\)：
 
-- **调出仓**：\(X_r>h_r\)，可向目标 \(T\) 靠拢，盈余 \(E_r=X_r-T\)；
+- **调出仓**：\(X_r>h_r\)，最多调出 \(X_r-h_r\)（保留 \(h_r\)）；
 - **调入仓**：\(X_m<T\)，缺口 \(D_m=T-X_m\)；
 - 贪心：调出仓按 \(E_r\) 降序，调入仓按 \(D_m\) 降序；同分时调入仓优先
   \(W_{out}+\hat F^{next}\) 大者，调出仓优先小者；
@@ -781,9 +782,11 @@ I_{out}=S_{end}+\tau,
 固定一个全局门限只是手工折中；把 \(h_r\) 作为优化参数，每仓可以自己选择
 “何时调出、保留多少”，并与 \(S_r\) 交互：
 
-- \(h_r=T=5\)：只要 \(X_r>5\) 就调出（激进）；
-- \(h_r=I^{\max}_r\)：该仓永不调出（等价于该仓关闭主动调拨）；
-- 中间值：按仓库自己的门限触发。
+- \(h_r=0\)：只要 \(X_r>0\) 就可调出（激进；保留 0）；
+- \(h_r=5\)：只有超过 5 的仓才调出，且调出后保留 5；
+- \(h_r=I^{\max}_r\)：该仓永不调出（等价于该仓关闭主动调出）；
+- 调入仓仍统一补到 \(T=5\)，因此 \(h\) 和 \(T\) 的角色不同：
+  \(h\) 控制源仓保留/触发，\(T\) 控制目的仓补货水平。
 
 ### 14.4 配置与运行
 
@@ -793,26 +796,29 @@ I_{out}=S_{end}+\tau,
 [policy]
 active_transfer = true
 active_rule = "threshold_balance"
-active_target = 5.0
-active_threshold_init = 5.0   # h 初值；h 本身是优化参数
-active_threshold_min = 5.0    # h 下界 = T
-active_fraction = 1.0        # alpha
+active_target = 5.0              # 调入目标 T（固定）
+active_threshold_init = 5.0      # 每仓 h 初值；h 本身是优化参数
+active_threshold_min = 0.0       # h 下界；h=Imax 等价于关闭该仓调出
+active_fraction = 1.0            # alpha
 active_stop_offset = 2
 active_priority = "deficit_risk"
 active_forecast = "pool_mean"
+
+[search]
+algorithms = ["genetic"]         # 新 active 标定统一用 GA
 ```
 
 ```bash
 COMPARE_CONFIG=config/compare_T60_base204105.toml \
   "$P" -B ss_static/run_calibrate.py \
   --policy-config ss_static/config/policy_active.toml \
-  --algo coordinate --tag ss_static_T60_204105_active
+  --algo genetic --tag ss_static_T60_204105_active_ga
 
 COMPARE_CONFIG=config/compare_T60_base204105.toml \
   "$P" -B ss_static/run_evaluate.py \
-  --policy results/ss_static/ss_static_T60_204105_active_calib_<时间戳>/policy.json \
+  --policy results/ss_static/ss_static_T60_204105_active_ga_calib_<时间戳>/policy.json \
   --policy-config ss_static/config/policy_active.toml \
-  --tag ss_static_T60_204105_active
+  --tag ss_static_T60_204105_active_ga
 ```
 
 `--policy-config` 会把 active TOML 复制进结果目录，避免“active policy +
@@ -828,3 +834,19 @@ no-active config”矛盾。评估报告从 policy JSON 读取 active options；
 - 门限初值/目标/α 的敏感性只在训练/验证路径上做，不用测试集调参；
 - active 可能增加采购（调出后又补货），必须分五项成本报告；
 - 末期默认停调，避免纯成本。
+
+### 14.6 h 保留下限 + GA 的结果（2026-10-30）
+
+- 标定：`results/ss_static/ss_static_T60_204105_active_ga_calib_20261030_102904/`
+  - genetic，`n_unique=1540`，墙钟 727.4 s；
+  - s≈[12,8,20,14.992,7.997]，S≈[12,8,20,15,8]；
+  - h=[12.0, 3.5830, 8.1723, 3.7657, 1.6777]；
+  - train 40,650.1032，val 40,695.5467。
+- 测试（3000 路径）：
+  `results/ss_static/ss_static_T60_204105_active_ga_eval_20261030_104153/`
+  - **40,619.4322 vs 基线 35,833.3228**，+4,786.1094（+13.36%），
+    t=97.62，胜率 1.87%，审计通过；
+  - active vs no-active（二者都用 GA）：**-775.5133（-1.8734%）**，
+    95% CI [-801.7197,-749.3069]，t=-58.00，胜率 89.77%。
+- 旧 active（h-target + coordinate）40,723.1142（+13.65%），
+  active vs no-active -671.83（-1.62%），仅作历史对照。

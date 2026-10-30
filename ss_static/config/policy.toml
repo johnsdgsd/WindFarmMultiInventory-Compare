@@ -15,7 +15,7 @@ fill = "local_then_priority"
 # coordinate, random, nelder-mead, powell, differential-evolution,
 # dual-annealing, genetic, simulated-annealing
 # CLI --algo 可覆盖；--algo all 跑全部。
-algorithms = ["coordinate"]
+algorithms = ["genetic"]
 integer_params = false           # true = 只搜整数 s,S（敏感性；MD 原文为 R）
 seed = 2026                      # 优化器随机种子（训练/验证路径 seed 在 compare.toml）
 q_r = 1.0                        # s0=max(0,S0−Q_r)，MD 允许 1 或 d_r

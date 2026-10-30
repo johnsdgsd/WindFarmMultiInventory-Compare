@@ -45,10 +45,8 @@ if __name__ == "__main__":
                     help="替代策略 TOML，如 ss_static/config/policy_active.toml")
     ap.add_argument("--active", action="store_true",
                     help="开启主动调拨（active_transfer=true）")
-    ap.add_argument("--active-target", type=float, default=None,
-                    help="主动调拨目标库存 T（默认 5）")
     ap.add_argument("--active-threshold-init", type=float, default=None,
-                    help="每仓门限 h 的初值；h 本身是优化参数")
+                    help="每仓保留/目标水平 h 的初值；h 本身是优化参数")
     ap.add_argument("--active-fraction", type=float, default=None,
                     help="每次调拨比例 alpha（默认 1.0）")
     ap.add_argument("--active-rule", default=None,
@@ -60,7 +58,6 @@ if __name__ == "__main__":
     args = ap.parse_args()
     active_options = {
         "active_transfer": True if args.active else None,
-        "active_target": args.active_target,
         "active_threshold_init": args.active_threshold_init,
         "active_fraction": args.active_fraction,
         "active_rule": args.active_rule,

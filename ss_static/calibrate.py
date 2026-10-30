@@ -140,10 +140,10 @@ def _calibration_md(prob, cfg, run_id, paths_train, paths_val, d, m,
     if active:
         active_txt = (
             f"；active_rule={options.get('active_rule')}"
-            f"，target={options.get('active_target')}"
+            f"，target T={options.get('active_target')}"
             f"，alpha={options.get('active_fraction')}"
             f"，stop_offset={options.get('active_stop_offset')}"
-            f"；每仓门限 h 是优化参数")
+            f"；每仓保留水平 h 是优化参数（h 是源仓下限，不是 T）")
     h_header = " h |" if active else ""
     h_sep = "---|" if active else ""
     lines = [
@@ -192,8 +192,8 @@ def _calibration_md(prob, cfg, run_id, paths_train, paths_val, d, m,
     ]
     if active and chosen.get("h") is not None:
         lines.append(
-            f"- 选中每仓门限 h={np.round(chosen['h'], 4).tolist()}"
-            f"（目标 T={options.get('active_target')}）")
+            f"- 选中每仓保留/目标水平 h="
+            f"{np.round(chosen['h'], 4).tolist()}")
     lines += [
         f"- 训练成本：{chosen['train_cost']:.4f}；验证成本：{chosen['val_cost']:.4f}",
         f"- 验证最优：{candidates[0]['val_cost']:.4f}；"
@@ -205,8 +205,8 @@ def _calibration_md(prob, cfg, run_id, paths_train, paths_val, d, m,
         "- 各算法/起点明细见 `algorithm_starts.csv`；唯一评价历史见 `optimization_history.csv`。",
         "- 训练/验证路径不参与测试；测试只在 `evaluate.py` 使用基线 npz 的 `scene`。",
         "- q0 在 t=1 计采购费；q_T 不计采购费；q≤Qmax；无 stop offset（docs/s,S.md 口径）。",
-        "- active 时 θ=[s,S,h]；每仓门限 h 与 s,S 一起优化，目标 T 固定；"
-        "末期默认最后 2 期不主动调拨。",
+        "- active 时 θ=[s,S,h]；h 是每仓源仓保留下限，与 s,S 一起优化；"
+        "调入目标 T 固定；末期默认最后 2 期不主动调拨。",
         "- 成本单位是万元；行为量（库存/待修）是台/件，不是金额。",
         f"- 版本：Python {code_versions.get('python')}，NumPy {code_versions.get('numpy')}，"
         f"SciPy {code_versions.get('scipy')}",
@@ -236,11 +236,10 @@ def calibrate(project_dir: str | Path, *, tag: str | None = None,
             if v is not None:
                 options[k] = v
     active_flag = bool(options.get("active_transfer", False))
-    active_target = float(options.get("active_target", 5.0))
-    active_min = float(options.get("active_threshold_min", active_target))
-    active_h_init = float(options.get("active_threshold_init", active_target))
-    if active_min < active_target - 1e-12:
-        raise ValueError("active_threshold_min 必须 ≥ active_target")
+    active_min = float(options.get("active_threshold_min", 0.0))
+    active_h_init = float(options.get("active_threshold_init", active_min))
+    if active_min < 0:
+        raise ValueError("active_threshold_min 必须 ≥0")
     search = _validate_search(pcfg["search"], prob)
     if integer is not None:
         search["integer_params"] = bool(integer)
@@ -280,15 +279,14 @@ def calibrate(project_dir: str | Path, *, tag: str | None = None,
     m = moments(prob, d)
     starts = analytic_starts(
         prob, d, search, active=active_flag,
-        active_target=active_target, active_threshold_init=active_h_init)
+        active_min=active_min, active_threshold_init=active_h_init)
     if search["budget_unique"] > 0:
         _apply_budget(search, search["budget_unique"], len(starts), prob,
                       active=active_flag)
     evaluator = SSEvaluator(prob, options)
     space = ParamSpace(
         prob.Imax, integer=search["integer_params"],
-        active=active_flag, active_target=active_target,
-        active_min=active_min)
+        active=active_flag, active_min=active_min)
 
     print(f"无限库存基线 d={np.round(d, 6).tolist()} "
           f"mu={np.round(m['mu'], 4).tolist()} "

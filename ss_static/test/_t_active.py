@@ -49,11 +49,11 @@ def _fake_prob(K=5, G=4, L=3, T=60, Imax=None):
     )
 
 
-def _rule(alpha=1.0, stop=0, target=5.0):
+def _rule(alpha=1.0, stop=0, min_h=0.0):
     prob = _fake_prob()
     opts = {
         "active_transfer": True, "active_rule": "threshold_balance",
-        "active_target": target, "active_threshold_min": target,
+        "active_threshold_min": min_h,
         "active_fraction": alpha, "active_stop_offset": stop,
         "active_priority": "deficit", "active_forecast": "pool_mean",
     }
@@ -90,8 +90,9 @@ def main():
     check(float(np.abs(tau).sum()) < 1e-12, "X<h 不应调出")
     X, W, n, o, q = _state([6.5, 0, 0, 0, 0])
     tau = rule.decide(1, X, W, n, o, q, None, h6)
-    check(abs(float(tau[0, 0] + 1.5)) < 1e-12
-          and abs(float(tau[0, 1] - 1.5)) < 1e-12,
+    # h 是保留下限：6.5-6=0.5，而不是旧的 X-T=1.5
+    check(abs(float(tau[0, 0] + 0.5)) < 1e-12
+          and abs(float(tau[0, 1] - 0.5)) < 1e-12,
           f"h=6 的调出量不对: {tau}")
 
     # 3) h=Imax：该仓关闭
@@ -119,7 +120,7 @@ def main():
     p2 = _fake_prob(Imax=[12, 5, 20, 15, 8])
     opts2 = {
         "active_transfer": True, "active_rule": "threshold_balance",
-        "active_target": 5.0, "active_threshold_min": 5.0,
+        "active_threshold_min": 0.0,
         "active_fraction": 1.0, "active_stop_offset": 0,
         "active_priority": "deficit", "active_forecast": "pool_mean",
     }
@@ -203,12 +204,11 @@ def main():
     check(pol2.active_enabled, "policy active_enabled")
 
     # 11) 3K 参数空间
-    space = ParamSpace(imax, active=True, active_target=5.0,
-                       active_min=5.0)
+    space = ParamSpace(imax, active=True, active_min=0.0)
     check(space.dim == 3 * prob_real.N_R, f"active dim={space.dim}")
     th = space.clip(np.concatenate([imax, imax,
                                     np.full(prob_real.N_R, 5.0)]))
-    check(np.all(th[2 * prob_real.N_R:] >= 5.0 - 1e-9), "h 下界")
+    check(np.all(th[2 * prob_real.N_R:] >= -1e-9), "h 下界")
     rt = space.from_u(space.to_u(th))
     check(float(np.max(np.abs(rt - th))) < 1e-6, "active u round-trip")
     samp = space.sample(np.random.default_rng(1), 10)
@@ -242,7 +242,7 @@ def main():
               "active_transfer 未记录")
         h_opt = np.asarray(data.get("active_thresholds", []), float)
         check(h_opt.size == prob_real.N_R
-              and np.all(h_opt >= 5.0 - 1e-9)
+              and np.all(h_opt >= -1e-9)
               and np.all(h_opt <= imax + 1e-9), f"active h={h_opt}")
         run = json.loads((Path(d) / "run.json").read_text(encoding="utf-8"))
         check(run["status"] == "completed", "active run 未完成")

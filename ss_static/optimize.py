@@ -54,7 +54,6 @@ class ParamSpace:
     u_bound: float = 12.0
     snap_frac: float = 1e-5
     active: bool = False
-    active_target: float = 5.0
     active_min: float | None = None
 
     def __post_init__(self):
@@ -62,13 +61,10 @@ class ParamSpace:
         if self.Imax.size < 1 or np.any(self.Imax <= 0):
             raise ValueError(f"Imax 非法: {self.Imax}")
         self.K = int(self.Imax.size)
-        self.active_target = float(self.active_target)
-        if self.active_target < 0:
-            raise ValueError("active_target 必须 ≥0")
-        self.active_min = (self.active_target if self.active_min is None
+        self.active_min = (0.0 if self.active_min is None
                            else float(self.active_min))
-        if self.active_min < self.active_target - 1e-12:
-            raise ValueError("active_min 必须 ≥ active_target")
+        if self.active_min < 0:
+            raise ValueError("active_min 必须 ≥0")
         if self.active and np.any(self.Imax < self.active_min - 1e-12):
             raise ValueError(
                 f"Imax 必须 ≥ active_min={self.active_min}: {self.Imax}")

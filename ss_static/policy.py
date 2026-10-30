@@ -45,7 +45,6 @@ class PolicyBase:
         self.max_passive_cost = float(self._opt("max_passive_cost"))
         # active 机制可插拔；旧 policy JSON 没有这些键时默认 mode 0
         self.active_enabled = bool(self.options.get("active_transfer", False))
-        self.active_target = float(self.options.get("active_target", 5.0))
         self.active_rule_name = str(self.options.get(
             "active_rule", "threshold_balance"))
         self.active_rule = make_active_rule(prob, self.options)
@@ -157,9 +156,8 @@ class SSStaticPolicy(PolicyBase):
                 raise ValueError(f"h 长度必须为 N_R={self.N_R}")
             if not np.all(np.isfinite(h)):
                 raise ValueError("h 必须有限")
-            if np.any(h < self.active_target - 1e-9):
-                raise ValueError(
-                    f"h 必须 ≥ active_target={self.active_target}: {h}")
+            if np.any(h < -1e-9):
+                raise ValueError(f"h 必须 ≥0: {h}")
             if np.any(h > self.Imax + 1e-9):
                 raise ValueError(f"h 超过 Imax: {h}")
             self.h = h

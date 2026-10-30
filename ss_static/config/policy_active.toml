@@ -1,4 +1,5 @@
-# 主动调拨变体（mode 1）：每仓门限 h 是优化参数，目标 T=5 固定。
+# 主动调拨变体（mode 1）：每仓保留水平 h 是优化参数。
+# h 是源仓保留下限/触发线；T 是统一调入目标（固定）。
 # 用法：run_calibrate.py --policy-config ss_static/config/policy_active.toml
 # 其余策略选项与 policy.toml 相同；本文件是完整配置，避免归档时配置与 policy 矛盾。
 
@@ -13,16 +14,16 @@ fill = "local_then_priority"
 
 # 主动调拨（ThresholdBalanceRule）
 active_rule = "threshold_balance"
-active_target = 5.0              # 每仓目标库存 T（固定）
-active_threshold_init = 5.0      # 每仓门限 h 的初值；h 本身是优化参数
-active_threshold_min = 5.0       # h 下界 = T；h=Imax 等价于该仓关闭主动调拨
+active_target = 5.0              # 调入目标 T（固定）；h 不是 T
+active_threshold_init = 5.0      # 每仓 h 的初值；h 本身是优化参数
+active_threshold_min = 0.0       # h 下界；h=Imax 等价于该仓不作为调出源
 active_fraction = 1.0            # 每次调拨比例 alpha
 active_stop_offset = 2           # 最后 2 期不主动调拨
 active_priority = "deficit_risk" # 调入仓优先 W_out+E[F_next] 大者
 active_forecast = "pool_mean"    # 300 场景池平均转移矩阵
 
 [search]
-algorithms = ["coordinate"]
+algorithms = ["genetic"]
 integer_params = false
 seed = 2026
 q_r = 1.0
@@ -84,4 +85,4 @@ sigma = 0.5
 n_chains = 3
 
 [output]
-tag = "ss_static_T60_204105_active"
+tag = "ss_static_T60_204105_active_ga"

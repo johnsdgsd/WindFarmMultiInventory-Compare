@@ -147,10 +147,11 @@ def _summary_md(prob, cfg, base, pol, policy_data, res, ps, ts_list,
     active_txt = ""
     if mode:
         active_txt = (
-            f"；active target T={pol_options.get('active_target')}"
-            f"，rule={pol_options.get('active_rule')}"
+            f"；rule={pol_options.get('active_rule')}"
+            f"，target T={pol_options.get('active_target')}"
             f"，alpha={pol_options.get('active_fraction')}"
-            f"，stop_offset={pol_options.get('active_stop_offset')}")
+            f"，stop_offset={pol_options.get('active_stop_offset')}"
+            f"；每仓保留水平 h 是优化参数")
     h_txt = ""
     if getattr(pol, "h", None) is not None:
         h_txt = f"，h={np.round(pol.h, 4).tolist()}"

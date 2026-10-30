@@ -37,11 +37,11 @@ class NoActiveRule(ActiveTransferRule):
 
 
 class ThresholdBalanceRule(ActiveTransferRule):
-    """每仓门限 h_r + 目标库存 T 的主动调拨。
+    """每仓保留水平 h_r 的主动调拨。
 
     被动履约后 X=S_end：
-      - X_r > h_r 的仓为调出仓，可调出 X_r - T（向 T 靠拢）；
-      - X_m < T 的仓为调入仓，缺口 T - X_m；
+      - X_r > h_r 的仓为调出仓，最多调出 X_r - h_r（h 为保留下限）；
+      - X_m < T 的仓为调入仓，缺口 T - X_m（T 为统一调入目标）；
       - 贪心选择最大盈余/最大缺口；同分时调入仓优先高 W_out+E[F_next]，
         调出仓优先低 W_out+E[F_next]；
       - 目标剩余容量扣除下一期在途 o_next 和本期订单 q_out；
@@ -92,8 +92,8 @@ class ThresholdBalanceRule(ActiveTransferRule):
         h = np.asarray(h, dtype=float).reshape(-1)
         if h.size != self.K:
             raise ValueError(f"active threshold h 长度 {h.size} ≠ {self.K}")
-        if np.any(h < self.target - 1e-9):
-            raise ValueError(f"h 必须 ≥ active_target={self.target}: {h}")
+        if np.any(h < -1e-9):
+            raise ValueError(f"h 必须 ≥0: {h}")
         if np.any(h > self.Imax + 1e-9):
             raise ValueError(f"h 超过 Imax: {h}")
 
@@ -110,7 +110,7 @@ class ThresholdBalanceRule(ActiveTransferRule):
         sum_other = X0.sum(axis=1, keepdims=True) - X0
         # alpha 是每个源仓本期的总调出比例；避免多轮贪心把 alpha 抵消掉
         E0 = np.where(X0 > h[None, :],
-                      np.maximum(X0 - self.target, 0.0), 0.0)
+                      np.maximum(X0 - h[None, :], 0.0), 0.0)
         source_budget = self.alpha * E0
 
         # 最多 2K 轮；每轮至少耗尽一个盈余/缺口/容量，通常远少于 2K
@@ -119,7 +119,7 @@ class ThresholdBalanceRule(ActiveTransferRule):
                    - o_next.sum(axis=1) - q_out)
             cap = np.maximum(cap, 0.0)
             E = np.where(Xw > h[None, :],
-                         np.maximum(Xw - self.target, 0.0), 0.0)
+                         np.maximum(Xw - h[None, :], 0.0), 0.0)
             D = np.maximum(self.target - Xw, 0.0)
             D_eff = np.where(cap > 0.0, D, 0.0)
             if not np.any(E > 1e-12) or not np.any(D_eff > 1e-12):

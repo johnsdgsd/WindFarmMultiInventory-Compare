@@ -5,7 +5,9 @@
 归档和报告；`common/` 只提供模型加载、配置、基线读取和通用配对统计。
 
 另有可插拔主动调拨变体（mode 1，`active.py::ThresholdBalanceRule`）：
-目标 T=5，**每仓门限 h 是优化参数**（active 3K 维，no-active 2K）。
+调入目标 T=5 固定；**每仓保留水平 h 是优化参数**（active 3K 维，
+no-active 2K）。h 是源仓保留下限/触发线，不是 T：
+\(X_r>h_r\) 时最多调出 \(X_r-h_r\)，\(X_m<T\) 时补到 T。
 no-active 与 active 两个 arm 都正式报告。
 
 ## 文件
@@ -66,11 +68,14 @@ res = ev.evaluate(theta, paths, record=True)   # 明细：五项、行为、arra
 
 `active.py::ThresholdBalanceRule`：
 
-- 目标库存 T=5（固定）；**每仓门限 h 是优化参数**，与 s,S 一起搜索（3K）。
-- 被动履约后 \(X=S^{end}\)：\(X_r>h_r\) 的仓调出，\(X_m<T\) 的仓调入；
-  按盈余/缺口贪心，扣容量/来源/守恒约束；每仓每期调出比例 α。
+- 调入目标 T=5（固定）；**每仓保留水平 h 是优化参数**，与 s,S 一起搜索（3K）。
+- 被动履约后 \(X=S^{end}\)：\(X_r>h_r\) 的仓最多调出 \(X_r-h_r\)；
+  \(X_m<T\) 的仓补到 T；按盈余/缺口贪心，扣容量/来源/守恒约束；
+  每仓每期调出比例 α。
+- h 是源仓保留下限/触发线；h=Imax 等价于该仓不作为调出源。
 - 最后 2 期默认不调；下一期失效用 300 场景池平均预测。
 - 配置 `config/policy_active.toml`；no-active 与 active 都正式报告。
+- 新一轮 active 标定统一用遗传算法（`--algo genetic`）。
 
 ```bash
 P="D:/WYJ/Anaconda/Anaconda3/envs/MyRL/python.exe"
@@ -160,12 +165,15 @@ results/ss_static/
   策略 41394.9455 vs 基线 35833.3228，配对差 +5561.6227（+15.52%），
   审计通过。标定 `..._204105_calib_20261027_130616`，
   评估 `..._204105_eval_20261027_131049`。
-- **active（mode 1，每仓 h 优化）**：active calib `..._active_calib_20261027_163659`，
-  eval `..._active_eval_20261027_164616`；s=S=Imax，
-  h=[9.5132,5.0,10.7237,5.0,5.0]；测试 40723.1142 vs 基线 35833.3228
-  （+4889.7914，+13.65%，t=98.83，审计通过）；
-  active vs no-active **-671.8313（-1.623%，t=-55.35，胜率 89.03%）**。
+- **active（mode 1，h 为源仓保留下限，GA）**：
+  calib `..._active_ga_calib_20261030_102904`，
+  eval `..._active_ga_eval_20261030_104153`；s≈[12,8,20,14.99,8]，
+  S≈[12,8,20,15,8]；h=[12.0,3.5830,8.1723,3.7657,1.6777]；
+  测试 40619.4322 vs 基线 35833.3228
+  （+4786.1094，+13.36%，t=97.62，审计通过）；
+  active vs no-active **-775.5133（-1.8734%，t=-58.00，胜率 89.77%）**。
   active 显著改善 s,S，但仍差于 SDDP 基线。
+  旧 active（h-target + coordinate）：40723.1142（+13.65%），仅作历史对照。
 - 跨运行索引：`results/ss_static/index.csv`；跨运行总结：
   `results/ss_static/SUMMARY_20261027_164929.md`；每 run 的
   `summary.md`/`calibration.md`/`conclusion.md` 是最终口径来源。

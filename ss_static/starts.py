@@ -48,12 +48,12 @@ def moments(prob, d: np.ndarray) -> dict:
 
 def analytic_starts(prob, d: np.ndarray, opts: dict, *,
                     active: bool = False,
-                    active_target: float = 5.0,
+                    active_min: float = 0.0,
                     active_threshold_init: float = 5.0) -> list[InitialPoint]:
     """docs/s,S.md §8：报童分位数初值、多起点与搜索半径。
 
-    active=True 时，θ 末尾追加每仓主动调拨门限 h 的初值；
-    h 本身是优化参数，初值默认等于 active_target。
+    active=True 时，θ 末尾追加每仓主动调拨保留/目标水平 h 的初值；
+    h 本身是优化参数，取值范围 [active_min, Imax]。
     """
     Imax = np.asarray(prob.Imax, dtype=float)
     m = moments(prob, d)
@@ -101,11 +101,11 @@ def analytic_starts(prob, d: np.ndarray, opts: dict, *,
                     "z": z, "beta": m["beta"]}
             if active:
                 h0 = np.full(int(prob.N_R), float(active_threshold_init))
-                h0 = np.clip(h0, float(active_target), Imax)
+                h0 = np.clip(h0, float(active_min), Imax)
                 theta = np.concatenate([theta, h0])
                 radius = np.concatenate(
-                    [radius, np.maximum(0.0, Imax - float(active_target))])
-                meta["active_target"] = float(active_target)
+                    [radius, np.maximum(0.0, Imax - float(active_min))])
+                meta["active_min"] = float(active_min)
                 meta["active_threshold_init"] = float(active_threshold_init)
             out.append(InitialPoint(
                 name=vname, theta=theta, radius=radius, meta=meta))
