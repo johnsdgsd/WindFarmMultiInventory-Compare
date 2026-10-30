@@ -41,7 +41,7 @@ class ThresholdBalanceRule(ActiveTransferRule):
 
     被动履约后 X=S_end：
       - X_r > h_r 的仓为调出仓，最多调出 X_r - h_r（h 为保留下限）；
-      - X_m < T 的仓为调入仓，缺口 T - X_m（T 为统一调入目标）；
+      - X_m < h_m 的仓为调入仓，缺口 h_m - X_m（h 同时是调入目标）；
       - 贪心选择最大盈余/最大缺口；同分时调入仓优先高 W_out+E[F_next]，
         调出仓优先低 W_out+E[F_next]；
       - 目标剩余容量扣除下一期在途 o_next（其中已含本期订单 q_t）；
@@ -53,11 +53,8 @@ class ThresholdBalanceRule(ActiveTransferRule):
 
     def __init__(self, prob, options: dict):
         super().__init__(prob, options)
-        self.target = float(options.get("active_target", 5.0))
         self.alpha = float(options.get("active_fraction", 1.0))
         self.stop_offset = int(options.get("active_stop_offset", 2))
-        if self.target < 0:
-            raise ValueError("active_target 必须 ≥0")
         if not (0.0 < self.alpha <= 1.0):
             raise ValueError("active_fraction 必须在 (0,1]")
         if self.stop_offset < 0:
@@ -118,7 +115,7 @@ class ThresholdBalanceRule(ActiveTransferRule):
             cap = np.maximum(cap, 0.0)
             E = np.where(Xw > h[None, :],
                          np.maximum(Xw - h[None, :], 0.0), 0.0)
-            D = np.maximum(self.target - Xw, 0.0)
+            D = np.maximum(h[None, :] - Xw, 0.0)
             D_eff = np.where(cap > 0.0, D, 0.0)
             if not np.any(E > 1e-12) or not np.any(D_eff > 1e-12):
                 break
