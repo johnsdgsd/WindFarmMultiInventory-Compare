@@ -103,7 +103,7 @@ P="D:/WYJ/Anaconda/Anaconda3/envs/MyRL/python.exe"
 "$P" -B ss_static/test/_t_optimize.py
 "$P" -B ss_static/test/_t_archive.py
 "$P" -B ss_static/test/_t_audit.py
-"$P" -B ss_static/test/_t_lp_equiv.py
+"$P" -B ss_static/test/_t_timing.py
 "$P" -B ss_static/test/_t_pathgen.py
 "$P" -B ss_static/test/_t_baseline.py
 "$P" -B ss_static/test/_t_calibrate.py
@@ -161,19 +161,19 @@ results/ss_static/
   测试 1161.9423（+40.77%）；全量 NM 确认测试 1162.8456（+40.88%），
   均显著优于坐标下降主结果（1171.5302），但仍远差于 SDDP。
 - 新 T60 基线 `base_T60_20261026_204105`（混合 n0，3000 测试路径）：
-  `config/compare_T60_base204105.toml`；s=S=Imax（边界解），
-  策略 41394.9455 vs 基线 35833.3228，配对差 +5561.6227（+15.52%），
-  审计通过。标定 `..._204105_calib_20261027_130616`，
-  评估 `..._204105_eval_20261027_131049`。
-- **active（mode 1，h 为源仓保留下限，GA）**：
-  calib `..._active_ga_calib_20261030_102904`，
-  eval `..._active_ga_eval_20261030_104153`；s≈[12,8,20,14.99,8]，
-  S≈[12,8,20,15,8]；h=[12.0,3.5830,8.1723,3.7657,1.6777]；
-  测试 40619.4322 vs 基线 35833.3228
-  （+4786.1094，+13.36%，t=97.62，审计通过）；
-  active vs no-active **-775.5133（-1.8734%，t=-58.00，胜率 89.77%）**。
-  active 显著改善 s,S，但仍差于 SDDP 基线。
-  旧 active（h-target + coordinate）：40723.1142（+13.65%），仅作历史对照。
+  **s,S 新时序（无 q_in/q0，2 层在途）**；GA，s=S=Imax；
+  no-active 标定 `..._noactive_ga_noqin_calib_20261030_110033`，
+  评估 `..._noactive_ga_noqin_eval_20261030_110621`；
+  **37950.9220 vs 35833.3228，+2117.5992（+5.91%），t=36.23，审计通过**。
+  旧 q_in 口径 41394.9455（+15.52%）仅作历史。
+- **active（mode 1，h 为源仓保留下限，GA，新时序）**：
+  calib `..._active_ga_noqin_calib_20261030_110608`，
+  eval `..._active_ga_noqin_eval_20261030_111549`；
+  s≈[11.94,8.00,19.98,15,8]，S=[12,8,20,15,8]，
+  h=[10.609,4.462,12.100,6.150,2.687]；
+  **37416.4504 vs 基线 35833.3228（+1583.1276，+4.42%，t=25.70，审计通过）**；
+  active vs no-active **-534.4716（-1.4083%，t=-45.35，胜率 82.57%）**。
+  旧 q_in active（+13.36%/+13.65%）仅作历史。
 - 跨运行索引：`results/ss_static/index.csv`；跨运行总结：
   `results/ss_static/SUMMARY_20261027_164929.md`；每 run 的
   `summary.md`/`calibration.md`/`conclusion.md` 是最终口径来源。

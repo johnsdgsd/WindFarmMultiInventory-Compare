@@ -18,8 +18,8 @@
 | 方法 | 均值（万元/路径） | 基线口径 | 相对差 |
 |---|---:|---|---:|
 | SDDP 基线全量 | 35,833.3228 | 3000 路径 | — |
-| s,S no-active | 41,394.9455 | 全量基线 | +15.52% |
-| s,S active（GA，h 为源仓保留下限） | 40,619.4322 | 全量基线 | +13.36% |
+| s,S no-active（新时序） | 37,950.9220 | 全量基线 | +5.91% |
+| s,S active（新时序，GA，h 为源仓保留下限） | 37,416.4504 | 全量基线 | +4.42% |
 | 旧时序滚动 final2（历史） | 39,891.1219 | 同 50 子集 | +12.52% |
 | 新时序 taufirst3（历史，前50） | 34,307.1189 | 同 50 子集 | -3.23% |
 | **新时序 W20 随机50** | **32,052.1364** | **同 50 子集 32,556.3100** | **-1.55%** |
@@ -90,7 +90,7 @@
   N=10/W=20，且基线自身 gap=11.889%，不能写成“优于最优”。
 - **PPO 加入时间特征后改善**：36,645.85 vs 旧版 37,285.95；
   但仍比基线高 +2.27%，95% CI [+320.14,+1,304.91]，尚未追平。
-- **PPO 已明显优于 active s,S**（40,619），但 5000 独立回合不是配对，
+- **PPO 仍高于新时序 active s,S**（37,416），但 5000 独立回合不是配对，
   不能直接和 rolling 的 3000 路径配对差比较。
 - **数值问题可处理**：COPT status=5 用 Presolve=0 重试（秒级），
   不再依赖 HiGHS 的 ~300 s IPM fallback；M=100/续跑/测试均通过。
@@ -225,7 +225,7 @@ P="D:/WYJ/Anaconda/Anaconda3/envs/MyRL/python.exe"
 "$P" -B ss_static/test/_t_optimize.py
 "$P" -B ss_static/test/_t_archive.py
 "$P" -B ss_static/test/_t_audit.py
-"$P" -B ss_static/test/_t_lp_equiv.py
+"$P" -B ss_static/test/_t_timing.py
 "$P" -B ss_static/test/_t_pathgen.py
 "$P" -B ss_static/test/_t_baseline.py
 "$P" -B ss_static/test/_t_calibrate.py
@@ -235,7 +235,8 @@ P="D:/WYJ/Anaconda/Anaconda3/envs/MyRL/python.exe"
 "$P" -B rolling_horizon/test/_t_evaluate.py
 ```
 
-`_t_lp_equiv.py` 需要 COPT，固定 q/y 放进主模型 LP，逐项对拍 290 项；
+`_t_timing.py` 检查 s,S 新时序（无 q_in/q0、q_t 进入在途、容量/成本/审计）；
+旧 `_t_lp_equiv.py` 因 s,S 与主模型 q_in 口径不再一致而退役；
 `_t_evaluation`/`_t_optimize`/`_t_archive` 是新增的方法自包含测试；
 `_t_archive` 用临时目录，不污染 `results/`。
 
@@ -322,7 +323,9 @@ r = ev.evaluate(theta, paths, record=True)             # 明细
 
 - `theta=[s_1..s_K, S_1..S_K]`，`paths=(P,T)` 场景号；
 - 目标：路径平均总成本 \(E(\theta;\mathcal P)\)；
-- 仿真口径：虚拟 q0 → 期初状态 → 订货 → 本期 Θ/失效 → 被动调拨 → 成本 → 转移；
+- 仿真口径：期初状态 → (s,S) 订货 q_t → 本期 Θ/失效 → 被动调拨 →
+  在途滚动/到货 → q_t 进入在途 → 主动调拨 → 成本 → 转移；
+  **没有虚拟 q0/q_in**；
 - q0 在 t=1 计采购费；q_T 不计；q≤Qmax；无 stop offset；mode 0 无主动调拨；
 - `record=False` 也累计 `(P,5)` 五项合计，避免优化时保存大数组；
 - 仿真/履约/策略全部在 `ss_static/`，不依赖 common 的策略逻辑。
@@ -400,7 +403,8 @@ results/ss_static/
 - 成本单位是**万元**；库存/待修/失效/替换是台/件。
 - 行为 `mean_inventory` 统一为**五仓合计**（旧基线的每仓口径是 5 倍误差）；
   用持有成本恒等式核对：\(hT(\bar I_{pol}-\bar I_{base})\approx\) 持有成本差。
-- 五项成本与主项目 LP 同口径：`_t_lp_equiv.py` 290 项通过。
+- s,S 五项成本与自身状态/时序一致：`_t_timing.py` 通过；
+  旧主 LP 对拍 `_t_lp_equiv.py` 因 q_in 口径变更退役。
 - 审计逐 (路径,期) `check_stage` + \(q\in[0,Q^{max}]\)；报告里
   `terms_vs_stage_cost_max_dev` 只是仿真器内部恒等式，不是 LP 对拍。
 - 静态规则 state-only；SDDP 的 \(q^{out}\) 是阶段决策、使用更丰富信息；
@@ -484,14 +488,19 @@ run `results/ss_static/ss_static_T60_algo_compare_calib_20261026_182233`。
   和期末值敏感性，不能写成“稳态下静态订货差 42%”。
 - T240 的 +18.1% 更稳健（期末值调整后仍约 +17–18%）；核心缺口是
   无主动调拨与空间错配。
-- 新基线 204105（混合 n0）：no-active +15.52%，active +13.36%；
-  active vs no-active -1.87%（t=-58.00，胜率 89.77%）；两者都正式报告，
-  不预设主次。旧 active（+13.65%，-1.62%）只作历史对照。
+- 新基线 204105（混合 n0，**s,S 新时序：无 q_in/q0**）：
+  no-active **+5.91%**，active **+4.42%**；
+  active vs no-active **-1.41%**（t=-45.35，胜率 82.57%）；
+  两者都正式报告，不预设主次。旧 q_in 的 no-active +15.52%、active +13.36%/
+  +13.65% 只作历史对照。
 - 基线自身有 gap（旧 T60 13.63%，T240 29.54%，新 T60 11.889%）；
   LB 不是基线策略成本。
 - 跨运行总结：`results/ss_static/SUMMARY_20261027_164929.md`（含 active）。
 
 ### 8.5 新 T60 基线 `base_T60_20261026_204105`（混合初始健康分布）
+
+> 以下 41,394.9455/+15.52% 等具体 s,S 数值是旧 q_in 口径；
+> 新时序 no-active 为 37,950.9220/+5.91%，见 §0.1/§8.7。
 
 配置文件：`config/compare_T60_base204105.toml`。
 
@@ -501,13 +510,14 @@ run `results/ss_static/ss_static_T60_algo_compare_calib_20261026_182233`。
 - 基线测试集用最新的 3000 路径 sim（`sim_3000paths.npz`）：
   LB=31573.2123，mean=35833.3228，gap=11.889%。
   目录里还有较早的 2000 路径 sim（mean=36663.8448，gap=14.678%），本对比不用它。
-- 标定：`results/ss_static/ss_static_T60_204105_calib_20261027_130616`；
-  选中 `coordinate` / `two_z`；**s=S=[12, 8, 20, 15, 8]，全部顶到 Imax（边界解）**；
-  train 41432.1628，val 41454.8334，n_unique=865。
-- 评估：`results/ss_static/ss_static_T60_204105_eval_20261027_131049`；
-  41394.9455 vs 35833.3228；配对差 **+5561.6227**
-  （95% CI [+5454.8368, +5668.4085]，t=102.08，胜率 1.37%，
-  相对差 **+15.52%**）；审计通过。
+- **新时序标定/评估（2026-10-30，无 q_in/q0）**：
+  `..._noactive_ga_noqin_calib_20261030_110033` /
+  `..._noactive_ga_noqin_eval_20261030_110621`；
+  GA，s=S=Imax，train 37939.0513，val 38052.8820，n_unique=1420；
+  测试 **37950.9220** vs 35833.3228，配对差 **+2117.5992（+5.91%）**，
+  t=36.23，胜率 10.17%，审计通过。
+- 旧 q_in 口径（历史）：coordinate，s=S=Imax，测试 41394.9455
+  （+15.52%）；只作历史对照。
 - **结论文件**：评估目录 `.../conclusion.md`；标定目录
   `ss_static_T60_204105_calib_20261027_130616/conclusion.md`。
 - 五项差：采购 +3025.37，持有 -95.90，停机 +814.08，主动调拨 -531.84，
@@ -520,7 +530,7 @@ run `results/ss_static/ss_static_T60_algo_compare_calib_20261026_182233`。
   “尽量满仓”策略；它服务率更高、期末待修更低，但采购和被动调拨更贵，
   仍显著差于 SDDP。**这是比旧 T60 更有利于静态策略的实例，但结论不变。**
 - 该基线使用主项目 HEAD `4ec38f9f...`；新配置已记录。关键测试
-  `_t_common`/`_t_audit`/`_t_pathgen`/`_t_lp_equiv`（290 项）在新配置下通过；
+  `_t_common`/`_t_audit`/`_t_pathgen`/`_t_timing` 在新配置下通过；
   `_t_baseline`/`_t_archive` 已改成按 (P,T) 识别已知基线。
 
 ### 8.6 为什么 s=S=Imax：边界解诊断
@@ -548,7 +558,7 @@ run `results/ss_static/ss_static_T60_algo_compare_calib_20261026_182233`。
   `d≈1.2–2.3`，同一套 Imax/Qmax 明显更紧。若这是有意的“成熟机队/混合健康”
   场景，建议按失效率重标 Imax/Qmax 并**重训 SDDP 基线**；不要只为让 s,S
   好看而单方面放宽边界。即使放宽，静态策略仍无主动调拨、规则履约、state-only，
-  结构差异仍在；本次 +15.52% 的差距不能全归因于 Imax。
+  结构差异仍在；旧 q_in 口径的 +15.52% 不能全归因于 Imax。
 
 ### 8.7 主动调拨（mode 1，h 为源仓保留下限 + GA）
 
@@ -558,27 +568,27 @@ run `results/ss_static/ss_static_T60_algo_compare_calib_20261026_182233`。
   `active_threshold_min=0`，`active_stop_offset=2`；下一期失效用 300 场景池平均预测。
 - 配置：`ss_static/config/policy_active.toml`；no-active 与 active 都正式报告；
   **新标定统一用 genetic**（population=40/generations=40，约 1540 次唯一评估）。
-- 新 active 标定：`results/ss_static/ss_static_T60_204105_active_ga_calib_20261030_102904`
-  - genetic；s≈[12,8,20,14.992,7.997]，S≈[12,8,20,15,8]；
-  - h=[12.0, 3.5830, 8.1723, 3.7657, 1.6777]；
-  - train 40650.1032，val 40695.5467，n_unique=1540，墙钟 727.4 s。
-- 新 active 评估：`results/ss_static/ss_static_T60_204105_active_ga_eval_20261030_104153`
-  - **40619.4322 vs 基线 35833.3228**；配对差 **+4786.1094（+13.36%）**；
-    95% CI [+4690.0126, +4882.2062]；t=97.62；胜率 1.87%；审计通过。
+- 新 active 标定（**s,S 新时序，无 q_in/q0**）：
+  `..._active_ga_noqin_calib_20261030_110608`
+  - genetic；s≈[11.94,8.00,19.98,15,8]，S=[12,8,20,15,8]；
+  - h=[10.6090, 4.4620, 12.1001, 6.1502, 2.6875]；
+  - train 37400.5641，val 37539.5733，n_unique=1541，墙钟 564.0 s。
+- 新 active 评估：`..._active_ga_noqin_eval_20261030_111549`
+  - **37416.4504 vs 基线 35833.3228**；配对差 **+1583.1276（+4.42%）**；
+    95% CI [+1462.4106, +1703.8446]；t=25.70；胜率 12.93%；审计通过。
 - **active vs no-active（同一 3000 路径，二者都用 GA）**：
-  **-775.5133 万元/路径（-1.8734%）**；95% CI [-801.7197, -749.3069]；
-  t=-58.00；胜率 89.77%。
-- 五项差（active−基线）：采购 +3147.15，持有 -30.57，停机 -5.37，
-  主动 -170.95，被动 +1845.85；相对 no-active，停机 -819.45、被动 -504.06，
-  但采购 +121.77、主动 +360.89，净 -775.51。
-- 行为：平均库存 24.08（基线）vs 23.44（active）；替换率 0.9036 vs 0.9565；
-  期末待修 51.19 vs 24.54；主动调拨量 106.37 vs 72.18。
-- 时间：首 10% 期 +236.43，中间段 +1455.70，末 10% 期 +3093.99；
-  期末值敏感性 +6.86% 到 +13.36%。
-- 旧 active（coordinate + h-target 规则）：40,723.1142（+13.65%），
-  active vs no-active -671.83（-1.62%）；现仅作历史对照，不作主结果。
-- 结论：主动调拨 + h 保留下限 + GA 显著改善 s,S（−1.87%），但仍是
-  规则型/state-only，**仍比 SDDP 基线差 +13.36%**；不能等同于完整价值函数。
+  **-534.4716 万元/路径（-1.4083%）**；95% CI [-557.5720,-511.3712]；
+  t=-45.35；胜率 82.57%。
+- 五项差（active−基线）：采购 +3428.14，持有 +281.70，停机 -3629.81，
+  主动 -199.03，被动 +1702.13；相对 no-active，停机 -615.00、被动 -473.39，
+  但采购 +130.86、持有 +90.24、主动 +332.81，净 -534.47。
+- 行为：平均库存 28.60（active）；替换率 0.9744；期末待修 14.63；
+  主动调拨量 66.56。
+- 时间：首 10% 期 +525.40，中间段 -673.92，末 10% 期 +1731.64；
+  期末值敏感性 -3.48% 到 +4.42%。
+- 旧 q_in active（+13.36%/+13.65%）只作历史对照，不作主结果。
+- 结论：主动调拨 + h 保留下限 + GA 显著改善 s,S（−1.41%），但仍是
+  规则型/state-only，**仍比 SDDP 基线差 +4.42%**；不能等同于完整价值函数。
 - 跨运行总结：`results/ss_static/SUMMARY_20261027_164929.md`（旧口径）。
 
 ### 滚动时域（全窗口两阶段 SAA）
@@ -607,7 +617,7 @@ run `results/ss_static/ss_static_T60_algo_compare_calib_20261026_182233`。
   `results/rolling_horizon/rolling_T60_204105_final2_20261028_223241/` 为准。
 - 测试：`rolling_horizon/test/_t_pool.py`、`_t_lp.py`（L-1 状态/两层容量/目标复算/
   t=T q=0/追索 cap_end）、`_t_rollout.py`、`_t_evaluate.py`；现有
-  `_t_lp_equiv.py` 仍通过。
+  `_t_timing.py` 通过（s,S 无 q_in 的新时序）。
 - 限制：N=10/M=50 是缩减规模；真实路径不是独立 seed_real；开环时变
   (s_t,S_t) 未实现，不能给 \(C^{roll}-C^{open}\) 归因。
 

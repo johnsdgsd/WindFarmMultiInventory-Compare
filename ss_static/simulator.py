@@ -137,11 +137,10 @@ class Simulator:
         self.ub = self.layout.upper(prob)
 
     # ------------------------------------------------------------------ 单期
-    def step(self, t: int, I, o, n, q, theta, policy) -> StepResult:
+    def step(self, t: int, I, o, n, theta, policy) -> StepResult:
         I = np.asarray(I, dtype=float)
         o = np.asarray(o, dtype=float)
         n = np.asarray(n, dtype=float)
-        q = np.asarray(q, dtype=float)
         theta = np.asarray(theta, dtype=float)
         P = I.shape[0]
         if I.shape != (P, self.N_R):
@@ -150,8 +149,6 @@ class Simulator:
             raise ValueError(f"o shape {o.shape}")
         if n.shape != (P, self.N_R, self.G):
             raise ValueError(f"n shape {n.shape}")
-        if q.shape != (P, self.N_R):
-            raise ValueError(f"q shape {q.shape}")
         if theta.shape != (P, self.N_R, self.G, self.G + 1):
             raise ValueError(f"theta shape {theta.shape}")
 
@@ -160,10 +157,15 @@ class Simulator:
         W_in = self.N[None, :] - n.sum(axis=2)
         W_in_pos = np.maximum(W_in, 0.0)
 
-        q_out = np.asarray(policy.order(t, I, o, n, q), dtype=float)
+        q_out = np.asarray(policy.order(t, I, o, n), dtype=float)
         if q_out.shape != (P, self.N_R):
             raise ValueError(f"policy.order 返回 shape {q_out.shape}")
-        if np.any(q_out < -1e-9) or np.any(q_out > self.Qmax[None, :] + 1e-9):
+        # 超容量/上界直接截断，保证 I + Σo + q <= Imax 且 q <= Qmax。
+        q_out = np.clip(q_out, 0.0, self.Qmax[None, :])
+        q_out = np.minimum(
+            q_out, np.maximum(self.Imax[None, :]
+                              - I - o.sum(axis=1), 0.0))
+        if np.any(q_out > self.Qmax[None, :] + 1e-9):
             raise ValueError("policy.order 返回的 q 越界 [0,Qmax]")
 
         D = W_in_pos + F_new
@@ -183,15 +185,15 @@ class Simulator:
         n_out = round_repair_vec(n_raw, self.N, self.digits, self.repair_tol)
         W_out = self.N[None, :] - n_out.sum(axis=2)
 
-        # 下一期在途（用于主动调拨的目标剩余容量 cap）
+        # 下一期在途：q_t 在到货后进入最后一层；没有 q_in。
         o_next = np.empty_like(o)
         if self.L > 2:
             o_next[:, :self.L - 2, :] = o[:, 1:, :]
-        o_next[:, self.L - 2, :] = q
+        o_next[:, self.L - 2, :] = q_out
 
         tau = np.asarray(
             policy.active_transfer(
-                t, S_end, W_out, n_out, o_next, q_out, theta),
+                t, S_end, W_out, n_out, o_next, theta),
             dtype=float)
         if tau.shape != (P, self.N_R):
             raise ValueError(
@@ -205,7 +207,9 @@ class Simulator:
         taup = np.maximum(tau, 0.0)
         taum = np.maximum(-tau, 0.0)
 
-        proc = self.C * q.sum(axis=1)
+        # 与 docs/s,S.md 一致：q_t 在当期计采购费；末期 q_T 不计费。
+        proc = (self.C * q_out.sum(axis=1) if t < self.T
+                else np.zeros(P, dtype=float))
         hold = self.h / 2.0 * (I.sum(axis=1) + I_out.sum(axis=1))
         down = self.Cs * W_in.sum(axis=1)
         active = self.atc / 2.0 * (taup + taum).sum(axis=1)
@@ -236,13 +240,8 @@ class Simulator:
         I = np.tile(self.I0[None, :], (P, 1))
         o = np.tile(self.o0[None, :, :], (P, 1, 1))
         n = np.tile(self.n0[None, :, :], (P, 1, 1))
-        q_state = np.zeros((P, self.N_R), dtype=float)
-
-        # 虚拟首阶段：只决定 q0，不计成本；没有随机转移
-        q0 = np.asarray(policy.order(0, I, o, n, q_state), dtype=float)
-        if q0.shape != (P, self.N_R):
-            raise ValueError(f"stage 0 policy.order 返回 shape {q0.shape}")
-        q_state = q0.copy()
+        # s,S 没有虚拟阶段 q0；第一期由 t=1 的决策直接订货。
+        q0 = np.zeros((P, self.N_R), dtype=float)
 
         arrays: dict = {}
         if record:
@@ -267,7 +266,7 @@ class Simulator:
         term_totals = np.zeros((P, 5), dtype=float)
         for t in range(1, self.T + 1):
             theta = self.theta_pool[scene_paths[:, t - 1]]
-            st = self.step(t, I, o, n, q_state, theta, policy)
+            st = self.step(t, I, o, n, theta, policy)
             totals += st.cost
             term_totals += st.terms
             if record:
@@ -278,7 +277,8 @@ class Simulator:
                     o.reshape(P, -1)
                 x[:, self.layout.off_n:self.layout.off_n + self.layout.n_n] = \
                     n.reshape(P, -1)
-                x[:, self.layout.off_q:self.layout.off_q + self.layout.n_q] = q_state
+                # 没有 q_in；主布局的 q 槽留 0（审计时另做映射）。
+                x[:, self.layout.off_q:self.layout.off_q + self.layout.n_q] = 0.0
                 arrays["x_in"][:, k, :] = x
                 arrays["q"][:, k, :] = st.q_out
                 arrays["taup"][:, k, :] = st.taup
@@ -293,15 +293,14 @@ class Simulator:
                 arrays["terms"][:, k, :] = st.terms
                 arrays["scene"][:, k] = np.asarray(scene_paths[:, k], dtype=np.int16)
 
-            # 状态转移：o_out[l]=o_in[l+1]；最后一层 = q_in；下一期 q = q_out
+            # 状态转移：o_out[l]=o_in[l+1]；最后一层 = 本期 q_t。
             o_out = np.empty_like(o)
             if self.L > 2:
                 o_out[:, :self.L - 2, :] = o[:, 1:, :]
-            o_out[:, self.L - 2, :] = q_state
+            o_out[:, self.L - 2, :] = st.q_out
             I = st.I_out
             o = o_out
             n = st.n_out
-            q_state = st.q_out
 
         if record:
             arrays["totals"] = totals.copy()
@@ -318,9 +317,8 @@ class Simulator:
         I = Ly.I(x)[None, :]
         o = Ly.o(x)[None, :, :]
         n = Ly.n(x)[None, :, :]
-        q = Ly.q(x)[None, :]
         theta = self.theta_pool[int(scene_idx)][None, :, :, :]
-        return self.step(t, I, o, n, q, theta, policy)
+        return self.step(t, I, o, n, theta, policy)
 
 
 def scene_hash(scene_paths: np.ndarray) -> str:
@@ -329,16 +327,16 @@ def scene_hash(scene_paths: np.ndarray) -> str:
 
 
 def out_state_from_step(layout, x_in, st: StepResult, p: int = 0) -> np.ndarray:
-    """由单步结果重建期末状态，口径同 code/sim_analysis.out_state。"""
+    """s,S 期末状态：o_out 最后一层是本期 q_t；没有 q_in。"""
     xo = np.empty(layout.dim)
     xo[:layout.n_I] = st.I_out[p]
     o = np.empty((layout.L - 1, layout.N_R))
     for l in range(layout.L - 2):
         o[l] = layout.o(x_in)[l + 1]
-    o[layout.L - 2] = layout.q(x_in)
+    o[layout.L - 2] = st.q_out[p]
     xo[layout.off_o:layout.off_o + layout.n_o] = o.ravel()
     xo[layout.off_n:layout.off_n + layout.n_n] = st.n_out[p].ravel()
-    xo[layout.off_q:layout.off_q + layout.n_q] = st.q_out[p]
+    xo[layout.off_q:layout.off_q + layout.n_q] = 0.0
     return xo
 
 
@@ -362,8 +360,14 @@ def audit_result(prob, res: SimulationResult, *, tol: float = 1e-6,
         for t in range(T):
             if max_points is not None and n >= max_points:
                 break
+            q_t = np.asarray(res.arrays["q"][p, t], dtype=float)
+            # 审计映射：s,S 无 q_in；把本期 q_t 放到审计副本的 q 槽，
+            # 使主模型 out_state/check_stage 正好生成下一期在途 [o2,q_t]。
+            x = np.asarray(res.arrays["x_in"][p, t], dtype=float).copy()
+            x[Ly.off_q:Ly.off_q + Ly.n_q] = q_t
             rec = {
-                "q": res.arrays["q"][p, t],
+                # out_state 的 q 槽是下一期 q_in；新时序没有 q_in，置 0。
+                "q": np.zeros_like(q_t),
                 "taup": res.arrays["taup"][p, t],
                 "taum": res.arrays["taum"][p, t],
                 "S_end": res.arrays["S_end"][p, t],
@@ -374,20 +378,24 @@ def audit_result(prob, res: SimulationResult, *, tol: float = 1e-6,
                 "W_out": res.arrays["W_out"][p, t],
                 "scene": int(res.arrays["scene"][p, t]),
             }
-            # npz 不存 I_out；无主动调拨时 I_out = S_end（与 analyze_sim 同口径）
             rec["I_out"] = (np.asarray(rec["S_end"], float)
                             + np.asarray(rec["taup"], float)
                             - np.asarray(rec["taum"], float))
-            x = res.arrays["x_in"][p, t]
             xo = out_state(Ly, x, rec)
             a = check_stage(
                 prob, Ly, x, xo, rec["q"], rec["taup"], rec["taum"],
                 rec["S_end"], rec["y"], rec["scene"], ub, F_new=rec["F_new"])
+            # 当前期订货容量：I + Σo + q_t <= Imax
+            I_in = Ly.I(x)
+            o_in = Ly.o(x)
+            a["cap"] = float(max(
+                a["cap"],
+                np.maximum(I_in + o_in.sum(axis=0) + q_t
+                           - np.asarray(prob.Imax), 0.0).max()))
             if t < T - 1:
                 a["链.状态"] = chain_dev(Ly, x, res.arrays["x_in"][p, t + 1], rec)
-            q = np.asarray(rec["q"], dtype=float)
-            a["q.下"] = float(max(0.0, -q.min()))
-            a["q.上"] = float(max(0.0, (q - np.asarray(prob.Qmax)).max()))
+            a["q.下"] = float(max(0.0, -q_t.min()))
+            a["q.上"] = float(max(0.0, (q_t - np.asarray(prob.Qmax)).max()))
             for c, v in a.items():
                 audit[c] = max(audit[c], float(v))
             n += 1

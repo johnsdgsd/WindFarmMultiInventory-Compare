@@ -168,7 +168,7 @@ P="D:/WYJ/Anaconda/Anaconda3/envs/MyRL/python.exe"
 "$P" -B rolling_horizon/test/_t_lp.py
 "$P" -B rolling_horizon/test/_t_rollout.py
 "$P" -B rolling_horizon/test/_t_evaluate.py
-"$P" -B ss_static/test/_t_lp_equiv.py
+"$P" -B ss_static/test/_t_timing.py
 ```
 
 `_t_lp` 覆盖：单一 q、`cap_init`/未来期 `cap`/`cap_next`、状态转移、

@@ -25,33 +25,35 @@
 
 ## 2. 订货决策
 
-阶段初观测 \(I_{r,t},q^{in}_{r,t},o_{l,r,t},n_{r,i,t}\)，导出
+阶段初观测 \(I_{r,t},o_{l,r,t},n_{r,i,t}\)（**没有 \(q^{in}\) 状态，也没有虚拟 \(q_0\)**），导出
 
 \[
 W_{r,t}=N_r-\sum_{i=0}^{G-1}n_{r,i,t},
 \]
 
 \[
-IP_{r,t}=I_{r,t}+q^{in}_{r,t}+\sum_{l=1}^{L-1}o_{l,r,t}-W_{r,t},
+IP_{r,t}=I_{r,t}+\sum_{l=1}^{L-1}o_{l,r,t}-W_{r,t},
 \]
 
 容量余量
 
 \[
-R_{r,t}=I^{\max}_r-\left(I_{r,t}+q^{in}_{r,t}+\sum_{l=1}^{L-1}o_{l,r,t}\right).
+R_{r,t}=I^{\max}_r-\left(I_{r,t}+\sum_{l=1}^{L-1}o_{l,r,t}\right).
 \]
 
 订货规则
 
 \[
-q^{out}_{r,t}
+q_{r,t}
 =
 \mathbf{1}_{\{IP_{r,t}<s_r\}}
 \cdot
-\max\left\{0,\ \min\left\{S_r-IP_{r,t},\ R_{r,t}\right\}\right\}.
+\max\left\{0,\ \min\left\{S_r-IP_{r,t},\ R_{r,t},\ Q^{\max}_r\right\}\right\}.
 \]
 
-容量约束由 \(R_{r,t}\) 截断自动满足，不需要单独约束 \(q^{out}\le Q^{\max}_r\)。
+若计算出的 \(q_{r,t}\) 仍因数值误差超过 \(R_{r,t}\) 或 \(Q^{\max}_r\)，
+直接截断到上界，保证 \(I_{r,t}+\sum_lo_{l,r,t}+q_{r,t}\le I^{\max}_r\)
+且 \(q_{r,t}\le Q^{\max}_r\)。
 
 ---
 
@@ -281,17 +283,20 @@ I_{r,t+1}=S^{end}_{r,t}+\tau_{r,t},
 \[
 o_{l,r,t+1}=o_{l+1,r,t},\ l=1,\dots,L-2,
 \qquad
-o_{L-1,r,t+1}=q^{in}_{r,t},
-\qquad
-q^{in}_{r,t+1}=q^{out}_{r,t}.
+o_{L-1,r,t+1}=q_{r,t}.
 \]
 
 初始条件
 
 \[
-I_{r,1}=0,\quad o_{l,r,1}=0,\quad q^{in}_{r,1}=q^{out}_{r,0},\quad
+I_{r,1}=0,\quad o_{l,r,1}=0,\quad
 n_{r,0,1}=N_r,\quad n_{r,i,1}=0\ (i\ge1),\quad W_{r,1}=0.
 \]
+
+时序：先由 \(IP_{r,t}\) 决定 \(q_{r,t}\)；再用手上 \(I_{r,t}\)
+做被动履约；然后 \(o_1\) 到货、在途向前滚动，\(q_{r,t}\) 进入
+下一期在途的最后一层；若启用主动调拨，在到货后的
+\(S^{end}_{r,t}\) 上执行 \(\tau_{r,t}\)。
 
 ---
 
@@ -302,7 +307,7 @@ J(\theta;\xi)
 =
 \sum_{t=1}^{T}\sum_{r=1}^{N_R}
 \left[
-C\,q^{in}_{r,t}
+C\,q_{r,t}\,\mathbf 1_{\{t<T\}}
 +h\,\frac{I_{r,t}+I_{r,t+1}}2
 +C_s\,W_{r,t}
 +\frac{atc}{2}\left(\tau^+_{r,t}+\tau^-_{r,t}\right)

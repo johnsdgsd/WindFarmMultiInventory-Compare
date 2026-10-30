@@ -57,23 +57,22 @@ def zeros(prob, P=1):
     o = np.zeros((P, prob.L - 1, prob.N_R))
     n = np.tile(np.asarray(prob.N)[None, :, None],
                 (P, 1, prob.G)).astype(float)
-    q = np.zeros((P, prob.N_R))
-    return I, o, n, q
+    return I, o, n
 
 
 def main():
     global PASS
     prob = fake_prob()
 
-    # stage 0：严格 IP<s；s=0 不下单，s>0 下单
-    I, o, n, q = zeros(prob)
+    # 没有虚拟阶段；t=1 直接按 IP<s 决策
+    I, o, n = zeros(prob)
     p0 = SSStaticPolicy(prob, [0, 0], [1, 1], OPTS)
-    check(np.allclose(p0.order(0, I, o, n, q), 0.0), "stage0 s=0 不应下单")
+    check(np.allclose(p0.order(1, I, o, n), 0.0), "IP=0,s=0 不应下单")
     p1 = SSStaticPolicy(prob, [1, 1], [1, 1], OPTS)
-    check(np.allclose(p1.order(0, I, o, n, q), 1.0), "stage0 s=1 应订 1")
+    check(np.allclose(p1.order(1, I, o, n), 1.0), "IP=0<s=1 应订 1")
     ph = SSStaticPolicy(prob, [0.5, 0.5], [1, 1], OPTS)
-    check(np.allclose(ph.order(0, I, o, n, q), 1.0),
-          "stage0 s=0.5,S=1 应补到 S=1")
+    check(np.allclose(ph.order(1, I, o, n), 1.0),
+          "IP=0<s=0.5,S=1 应补到 S=1")
 
     # 负 s 不是 docs/s,S.md 的策略空间
     try:
@@ -85,28 +84,28 @@ def main():
 
     # 严格触发：IP=s 不下单，IP<s 下单
     I1 = np.array([[1.0, 0.0]])
-    qq = p1.order(1, I1, o, n, q)
+    qq = p1.order(1, I1, o, n)
     check(np.allclose(qq, [[0.0, 1.0]]), f"IP=s 不应下单: {qq}")
     I2 = np.array([[0.99, 0.0]])
     p2 = SSStaticPolicy(prob, [1, 1], [2, 2], OPTS)
-    qq2 = p2.order(1, I2, o, n, q)
+    qq2 = p2.order(1, I2, o, n)
     check(np.allclose(qq2, [[1.01, 2.0]]), f"IP<s 应订: {qq2}")
 
     # Qmax 截断（MD 说 R 足够；本模型 q_out 还有 Qmax 变量上界）
     pq = SSStaticPolicy(prob, [0.5, 0.5], [6, 6], OPTS)
-    check(np.allclose(pq.order(1, I, o, n, q), [[3.0, 3.0]]),
+    check(np.allclose(pq.order(1, I, o, n), [[3.0, 3.0]]),
           "Qmax 截断失败")
 
     # 容量 R=Imax−gross：I=5,W=1 -> R=1；不应再加 out_known
     I3 = np.array([[5.0, 0.0]])
     n3 = np.array([[[9.0, 0.0], [10.0, 0.0]]])
     pcap = SSStaticPolicy(prob, [4.5, 0.5], [6, 6], OPTS)
-    qc = pcap.order(1, I3, o, n3, q)
+    qc = pcap.order(1, I3, o, n3)
     check(np.allclose(qc, [[1.0, 3.0]]), f"容量 R 截断: {qc}")
 
     # 无停订偏移：t=T 仍按规则订货（q_T 免费，但规则照常执行）
     pT = SSStaticPolicy(prob, [1, 1], [1, 1], OPTS)
-    check(np.allclose(pT.order(prob.T, I, o, n, q), 1.0), "t=T 应仍按规则")
+    check(np.allclose(pT.order(prob.T, I, o, n), 1.0), "t=T 应仍按规则")
 
     # 本地优先：后面的仓不会被前面的跨仓请求抢走本地库存
     y = p0.fulfill(1, np.array([[0.0, 2.0]]), np.array([[2.0, 2.0]]))

@@ -74,7 +74,7 @@ def main():
     # 1) 规则：目标 5，源/目标、净额、守恒
     prob, rule = _rule()
     X, W, n, o, q = _state([10, 0, 0, 0, 0])
-    tau = rule.decide(1, X, W, n, o, q, None, np.full(5, 5.0))
+    tau = rule.decide(1, X, W, n, o, None, np.full(5, 5.0))
     check(np.allclose(tau, [[-5, 5, 0, 0, 0]]),
           f"基本调拨 tau={tau}")
     check(abs(float(tau.sum())) < 1e-12, "tau 不守恒")
@@ -82,14 +82,14 @@ def main():
 
     # 2) 门限：X=5 不触发；X>h 才调出
     X, W, n, o, q = _state([5, 0, 0, 0, 0])
-    tau = rule.decide(1, X, W, n, o, q, None, np.full(5, 5.0))
+    tau = rule.decide(1, X, W, n, o, None, np.full(5, 5.0))
     check(float(np.abs(tau).sum()) < 1e-12, "X=5 不应调出")
     h6 = np.asarray([6.0, 5.0, 5.0, 5.0, 5.0])
     X, W, n, o, q = _state([5.5, 0, 0, 0, 0])
-    tau = rule.decide(1, X, W, n, o, q, None, h6)
+    tau = rule.decide(1, X, W, n, o, None, h6)
     check(float(np.abs(tau).sum()) < 1e-12, "X<h 不应调出")
     X, W, n, o, q = _state([6.5, 0, 0, 0, 0])
-    tau = rule.decide(1, X, W, n, o, q, None, h6)
+    tau = rule.decide(1, X, W, n, o, None, h6)
     # h 是保留下限：6.5-6=0.5，而不是旧的 X-T=1.5
     check(abs(float(tau[0, 0] + 0.5)) < 1e-12
           and abs(float(tau[0, 1] - 0.5)) < 1e-12,
@@ -97,20 +97,20 @@ def main():
 
     # 3) h=Imax：该仓关闭
     X, W, n, o, q = _state([10, 0, 0, 0, 0])
-    tau = rule.decide(1, X, W, n, o, q, None,
+    tau = rule.decide(1, X, W, n, o, None,
                       np.asarray(prob.Imax, float))
     check(float(np.abs(tau).sum()) < 1e-12, "h=Imax 应关闭")
 
     # 4) alpha=0.5
     _, rule_half = _rule(alpha=0.5)
     X, W, n, o, q = _state([10, 0, 0, 0, 0])
-    tau = rule_half.decide(1, X, W, n, o, q, None, np.full(5, 5.0))
+    tau = rule_half.decide(1, X, W, n, o, None, np.full(5, 5.0))
     check(np.allclose(tau, [[-2.5, 2.5, 0, 0, 0]]),
           f"alpha=0.5 tau={tau}")
 
     # 5) 多单位/部分缺口：只有仓 2 缺 0.1，源 5
     X, W, n, o, q = _state([10, 4.9, 5, 5, 5])
-    tau = rule.decide(1, X, W, n, o, q, None, np.full(5, 5.0))
+    tau = rule.decide(1, X, W, n, o, None, np.full(5, 5.0))
     check(abs(float(tau[0, 0] + 0.1)) < 1e-9
           and abs(float(tau[0, 1] - 0.1)) < 1e-9,
           f"部分缺口 tau={tau}")
@@ -127,10 +127,9 @@ def main():
     r2 = ThresholdBalanceRule(p2, opts2)
     X, W, n, o, q = _state([10, 3, 5, 5, 5])
     o = o.copy()
-    o[0, 0, 1] = 1.5     # o_next 的 destination 1
-    q = q.copy()
-    q[0, 1] = 0.3
-    tau = r2.decide(1, X, W, n, o, q, None, np.full(5, 5.0))
+    o[0, 0, 1] = 1.5     # o1 at destination 1
+    o[0, 1, 1] = 0.3     # q_t enters o2, also at destination 1
+    tau = r2.decide(1, X, W, n, o, None, np.full(5, 5.0))
     # cap = 5 - 3 - 1.5 - 0.3 = 0.2
     check(abs(float(tau[0, 1]) - 0.2) < 1e-9,
           f"目标容量未生效 tau={tau}")
@@ -139,7 +138,7 @@ def main():
     _, rule_stop = _rule(stop=2)
     X, W, n, o, q = _state([10, 0, 0, 0, 0])
     for t in (59, 60):
-        tau = rule_stop.decide(t, X, W, n, o, q, None, np.full(5, 5.0))
+        tau = rule_stop.decide(t, X, W, n, o, None, np.full(5, 5.0))
         check(float(np.abs(tau).sum()) < 1e-12, f"t={t} 应停调")
 
     # 8) 实际模型：active 评估、审计、I_out 恒等式、末期零 tau
@@ -227,8 +226,10 @@ def main():
             from common.baseline import load_baseline
             base = load_baseline(cfg, prob_real)
             r0 = ev0.evaluate(th0, base.scene, record=False)
-            check(abs(r0.cost - 41394.9455) < 1e-3,
-                  f"no-active 回归 {r0.cost} != 41394.9455")
+            # 旧时序 no-active = 41394.9455；新时序（无 q_in）同一 s=S=Imax
+            # 的确定性回归值是 37950.9220。
+            check(abs(r0.cost - 37950.9220) < 1e-3,
+                  f"no-active 新时序回归 {r0.cost} != 37950.9220")
 
     # 13) active quick 标定：mode/h/归档
     with tempfile.TemporaryDirectory() as td:

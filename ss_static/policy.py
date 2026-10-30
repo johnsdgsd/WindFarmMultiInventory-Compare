@@ -64,7 +64,7 @@ class PolicyBase:
             raise ValueError(f"策略选项 {key}={v!r} 不在 {choices}")
         return str(v)
 
-    def order(self, t: int, I, o, n, q):
+    def order(self, t: int, I, o, n):
         raise NotImplementedError
 
     def fulfill(self, t: int, I, D):
@@ -115,7 +115,7 @@ class PolicyBase:
                     rem[:, r] -= take
         return y
 
-    def active_transfer(self, t, X, W_out, n_out, o_next, q_out, theta):
+    def active_transfer(self, t, X, W_out, n_out, o_next, theta):
         """默认无主动调拨；active 子类用 active_rule 覆盖。"""
         return np.zeros_like(np.asarray(X, dtype=float))
 
@@ -162,33 +162,33 @@ class SSStaticPolicy(PolicyBase):
                 raise ValueError(f"h 超过 Imax: {h}")
             self.h = h
 
-    def order(self, t: int, I, o, n, q):
+    def order(self, t: int, I, o, n):
         I = np.asarray(I, dtype=float)
         o = np.asarray(o, dtype=float)
         n = np.asarray(n, dtype=float)
-        q = np.asarray(q, dtype=float)
         P = I.shape[0]
 
-        gross = I + o.sum(axis=1) + q
+        # s,S 没有 q_in：IP 只含在手库存 + 在途，不含当期决策 q_t。
+        gross = I + o.sum(axis=1)
         W = np.maximum(self.N[None, :] - n.sum(axis=2), 0.0)
         pos = gross - W if self.position == "net" else gross
         R = self.Imax[None, :] - gross
 
         need = self.S[None, :] - pos
         raw = np.maximum(0.0, np.minimum(need, R))
-        # 模型把 q_out 声明为 0≤q≤Qmax；docs/s,S.md 认为 R 截断即可，
-        # 但本实例 R 可大于 Qmax，所以必须保留模型的变量上界（否则越界）。
+        # q 同时受模型变量上界 Qmax 和库存容量 R 约束；越界直接截断。
         raw = np.minimum(raw, self.Qmax[None, :])
         q_new = np.where(pos < self.s[None, :], raw, 0.0)
+        q_new = np.clip(q_new, 0.0, self.Qmax[None, :])
         if q_new.shape != (P, self.N_R):
             raise RuntimeError(f"q_new shape {q_new.shape}")
         return q_new
 
-    def active_transfer(self, t, X, W_out, n_out, o_next, q_out, theta):
+    def active_transfer(self, t, X, W_out, n_out, o_next, theta):
         if not self.active_enabled:
             return np.zeros_like(np.asarray(X, dtype=float))
         return self.active_rule.decide(
-            t, X, W_out, n_out, o_next, q_out, theta, self.h)
+            t, X, W_out, n_out, o_next, theta, self.h)
 
     def params(self) -> dict:
         out = {

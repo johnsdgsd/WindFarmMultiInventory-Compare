@@ -39,10 +39,9 @@ def main():
     if dev > 1e-6:
         raise AssertionError(f"五项和 vs 总成本偏差 {dev}")
 
-    Ly = prob.layout
-    q0 = np.asarray(res.arrays["x_in"][:, 0, Ly.q_slice()], float)
     q_out = np.asarray(res.arrays["q"], float)
-    expected = prob.C * (q0.sum(axis=1) + q_out[:, :-1, :].sum(axis=(1, 2)))
+    # 新时序没有 q0；q_t 在 t=1..T-1 计采购费，q_T 不计。
+    expected = prob.C * q_out[:, :-1, :].sum(axis=(1, 2))
     actual = np.asarray(res.arrays["terms"][:, :, 0], float).sum(axis=1)
     proc_dev = float(np.max(np.abs(expected - actual)))
     if proc_dev > 1e-6:
@@ -59,8 +58,8 @@ def main():
     print("_t_audit: all checks passed")
     print(f"  审计项最大违约: {max(audit.values()):.3e}")
     print(f"  五项和偏差: {dev:.3e}；采购恒等式偏差: {proc_dev:.3e}")
-    print(f"  20 路径均值: {res.mean:.4f}；q0 合计/路径: "
-          f"{q0.sum() / res.P:.4f}；q_T max: {np.abs(q_out[:, -1, :]).max():.3e}")
+    print(f"  20 路径均值: {res.mean:.4f}；"
+          f"q_T max: {np.abs(q_out[:, -1, :]).max():.3e}")
 
 
 if __name__ == "__main__":

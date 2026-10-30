@@ -25,14 +25,14 @@ class ActiveTransferRule:
         self.Imax = np.asarray(prob.Imax, dtype=float)
         self.atc = float(getattr(prob, "atc", 0.0))
 
-    def decide(self, t: int, X, W_out, n_out, o_next, q_out, theta_t, h):
+    def decide(self, t: int, X, W_out, n_out, o_next, theta_t, h):
         raise NotImplementedError
 
 
 class NoActiveRule(ActiveTransferRule):
     name = "none"
 
-    def decide(self, t, X, W_out, n_out, o_next, q_out, theta_t, h):
+    def decide(self, t, X, W_out, n_out, o_next, theta_t, h):
         return np.zeros_like(np.asarray(X, dtype=float))
 
 
@@ -44,7 +44,7 @@ class ThresholdBalanceRule(ActiveTransferRule):
       - X_m < T 的仓为调入仓，缺口 T - X_m（T 为统一调入目标）；
       - 贪心选择最大盈余/最大缺口；同分时调入仓优先高 W_out+E[F_next]，
         调出仓优先低 W_out+E[F_next]；
-      - 目标剩余容量扣除下一期在途 o_next 和本期订单 q_out；
+      - 目标剩余容量扣除下一期在途 o_next（其中已含本期订单 q_t）；
       - 多源对一个目标时维护剩余容量/来源约束台账；
       - 默认末期最后 2 期不调（active_stop_offset=2）。
     """
@@ -79,7 +79,7 @@ class ThresholdBalanceRule(ActiveTransferRule):
             return (n_out * th[:, :, :, self.G]).sum(axis=2)
         return (n_out * self.theta_bar[None, :, :, self.G]).sum(axis=2)
 
-    def decide(self, t, X, W_out, n_out, o_next, q_out, theta_t, h):
+    def decide(self, t, X, W_out, n_out, o_next, theta_t, h):
         X0 = np.asarray(X, dtype=float)
         if X0.ndim != 2 or X0.shape[1] != self.K:
             raise ValueError(f"X shape {X0.shape}")
@@ -99,7 +99,6 @@ class ThresholdBalanceRule(ActiveTransferRule):
 
         W_out = np.asarray(W_out, dtype=float)
         o_next = np.asarray(o_next, dtype=float)
-        q_out = np.asarray(q_out, dtype=float)
         Xw = X0.copy()
         tau = np.zeros_like(X0)
         risk = W_out + self._expected_failures(n_out, theta_t)
@@ -115,8 +114,7 @@ class ThresholdBalanceRule(ActiveTransferRule):
 
         # 最多 2K 轮；每轮至少耗尽一个盈余/缺口/容量，通常远少于 2K
         for _ in range(max(1, 2 * self.K)):
-            cap = (self.Imax[None, :] - Xw
-                   - o_next.sum(axis=1) - q_out)
+            cap = self.Imax[None, :] - Xw - o_next.sum(axis=1)
             cap = np.maximum(cap, 0.0)
             E = np.where(Xw > h[None, :],
                          np.maximum(Xw - h[None, :], 0.0), 0.0)

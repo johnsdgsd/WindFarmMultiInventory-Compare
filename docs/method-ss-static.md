@@ -51,11 +51,13 @@
 阶段 \(t\) 的期初状态为
 
 \[
-x_t=\bigl(I_t,\;o_t,\;n_t,\;q^{in}_t\bigr),
+x_t=\bigl(I_t,\;o_t,\;n_t\bigr),
 \]
 
-其中 \(I_{r,t}\) 为期初在手库存，\(o_{l,r,t}\) 为第 \(l\) 层在途，
-\(n_{r,i,t}\) 为等级 \(i\) 的运行台数，\(q^{in}_{r,t}\) 为上期订货、本期计费的到货/在途。
+其中 \(I_{r,t}\) 为期初在手库存，\(o_{l,r,t}\) 为第 \(l\) 层在途
+（\(l=1,\dots,L-1\)，当前实例 \(L=3\)，共 **2 层**），
+\(n_{r,i,t}\) 为等级 \(i\) 的运行台数。
+**没有 \(q^{in}\) 状态，也没有虚拟阶段 \(q_0\)**；每期只有一个决策量 \(q_t\)。
 
 待修（停机）台数定义为
 
@@ -66,32 +68,28 @@ W_{r,t}=N_r-\sum_{i=0}^{G-1}n_{r,i,t}.
 数值上 \(W_{r,t}\) 可能因等级修复出现 \(10^{-4}\) 量级的负值；决策中使用
 \(W^+_{r,t}=\max(W_{r,t},0)\)，成本仍使用模型口径的 \(W_{r,t}\)（正常修复后 \(W\ge0\)）。
 
-### 2.2 初始条件与虚拟阶段 0
+### 2.2 初始条件（无虚拟阶段）
 
 \[
 I_{r,1}=0,\quad o_{l,r,1}=0,\quad
 n_{r,0,1}=N_r,\quad n_{r,i,1}=0\ (i\ge1),\quad W_{r,1}=0.
 \]
 
-在 \(t=0\) 的虚拟阶段，只有订货 \(q^0\) 是自由决策，不计当期成本：
-
-\[
-q^0_r=\mathbf 1\{IP_{r,0}<s_r\}\,
-\max\{0,\min(S_r-IP_{r,0},\,R_{r,0},\,Q^{\max}_r)\},
-\]
-
-其中 \(I_{r,0}=o_{r,0}=n_{r,0}=q^{in}_{r,0}=0\)，故 \(IP_{r,0}=0\)、\(R_{r,0}=I^{\max}_r\)。
-因此 \(s_r>0\) 时 \(q^0_r=\min(S_r,Q^{\max}_r)\)，否则为 0。
-\(q^0\) 进入 \(q^{in}_{r,1}\)，在 \(t=1\) **计采购费**。
+没有 \(t=0\) 的虚拟订货，也没有 \(q_0\)；第一期直接由 \(t=1\)
+的 \(IP\) 决定 \(q_1\)。
 
 ### 2.3 决策时序
 
-1. 观测 \(x_t\)；
-2. 按 (s,S) 规则选择 \(q^{out}_t\)（**只看状态，不看本期 \(\Theta_t\)**）；
-3. 实现 \(\Theta_t\)，计算新失效 \(F^{new}_t\) 与需求 \(D_t\)；
-4. 选择被动调拨 \(y_t\)（此时需求已知）；mode 0 的主动调拨 \(\tau_t=0\)；
-5. 计算本期成本；
-6. 状态转移到 \(x_{t+1}\)。
+1. 观测 \(x_t=(I_t,o_t,n_t)\)；
+2. 计算 \(IP_t=I_t+\sum_lo_{l,t}-W_t\)，按 (s,S) 决策 \(q_t\)
+   （**只看状态，不看本期 \(\Theta_t\)**）；
+3. 先用手上 \(I_t\) 履约：实现 \(\Theta_t\)，计算新失效 \(F^{new}_t\)
+   与需求 \(D_t\)，按本地优先/优先级做被动调拨 \(y_t\)；
+4. 在途滚动：\(o_1\) 到货，\(o_2\to o_1\)；本期 \(q_t\) 进入
+   下一期在途最后一层 \(o_{L-1,t+1}=q_t\)；
+5. 到货后 \(S^{end}_t=I_t-\sum y+o_{1,t}\)；若启用主动调拨，
+   在此库存上执行 \(\tau_t\)；
+6. \(I_{t+1}=S^{end}_t+\tau_t\)，计算本期成本，进入下一期。
 
 > 口径说明：SDDP 基线把 \(q^{out}_t\) 作为阶段 LP 的决策变量，和 \(\Theta_t\) 在同一个
 > 阶段问题里；静态规则是 state-only。这是“规则策略 vs 全状态/阶段决策”的信息集差异，
@@ -102,7 +100,7 @@ q^0_r=\mathbf 1\{IP_{r,0}<s_r\}\,
 定义
 
 \[
-G_{r,t}=I_{r,t}+q^{in}_{r,t}+\sum_{l=1}^{L-1}o_{l,r,t},
+G_{r,t}=I_{r,t}+\sum_{l=1}^{L-1}o_{l,r,t},
 \qquad
 R_{r,t}=I^{\max}_r-G_{r,t},
 \qquad
@@ -187,10 +185,10 @@ W_{r,t+1}=W_{r,t}+F^{new}_{r,t}-Y_{r,t},
 \[
 o_{l,r,t+1}=o_{l+1,r,t}\ (l=1,\dots,L-2),
 \qquad
-o_{L-1,r,t+1}=q^{in}_{r,t},
-\qquad
-q^{in}_{r,t+1}=q^{out}_{r,t}.
+o_{L-1,r,t+1}=q_{r,t}.
 \]
+
+不再有 \(q^{in}\) 递推；\(q_t\) 直接进入下一期最后一层在途。
 
 等级转移后按模型的 `round_repair` 做 6 位小数取整和 \(10^{-4}\) 容差修复：
 只从最大分量扣除不超过 `repair_tol` 的 \(\sum n\) 超额，不做缩放。
@@ -202,7 +200,7 @@ J(\theta;\xi)
 =
 \sum_{t=1}^{T}\sum_{r=1}^{N_R}
 \left[
-C\,q^{in}_{r,t}
+C\,q_{r,t}\,\mathbf 1_{\{t<T\}}
 +\frac h2\bigl(I_{r,t}+I_{r,t+1}\bigr)
 +C_s\,W_{r,t}
 +\sum_{m=1}^{N_R}tc_{r,m}\,y_{r,m,t}
@@ -211,10 +209,9 @@ C\,q^{in}_{r,t}
 
 mode 0 下主动调拨项为 0。计费口径：
 
-- \(q^{in}_{r,1}=q^0_r\)，\(q^{in}_{r,t}=q^{out}_{r,t-1}\)（\(t\ge2\)）；
-- 因此采购成本为
+- 没有 q0/q_in；采购成本按当期订货量计
   \[
-  C\sum_{r=1}^{N_R}\left(q^0_r+\sum_{t=1}^{T-1}q^{out}_{r,t}\right);
+  C\sum_{r=1}^{N_R}\sum_{t=1}^{T-1}q_{r,t};
   \]
   \(q_T\) 不计采购费；
 - 期末库存 \(I_{r,T+1}\) 进入第 \(T\) 期持有成本（\(\frac h2(I_T+I_{T+1})\)）；
@@ -549,8 +546,8 @@ t=\frac{\bar\Delta}{SE},
 | 期末待修 | \(\frac1P\sum_p\sum_r W_{r,T+1,p}\)（Σ仓） |
 | 平均期初待修 | \(\frac1{PT}\sum_{p,t}\sum_r W_{r,t,p}\)（Σ仓） |
 | 平均期初库存 | \(\frac1{PT}\sum_{p,t}\sum_r I_{r,t,p}\)（**Σ仓**；不含在途和 \(q\)） |
-| 下单量 | \(q^0+\sum_t q^{out}_t\)（含免费 \(q_T\)） |
-| 计费下单量 | \(q^0+\sum_{t=1}^{T-1}q^{out}_t\) |
+| 下单量 | \(\sum_t q_t\)（含免费 \(q_T\)） |
+| 计费下单量 | \(\sum_{t=1}^{T-1}q_t\) |
 | 订单频率 | \(\frac1{PTN_R}\sum_{p,t,r}\mathbf 1\{q^{out}_{r,t,p}>0\}\) |
 | 本地/跨仓替换 | \(y_{r,r}\) / \(y_{r,m},r\ne m\) |
 | 主动调拨量 | \(\frac12\sum_{t,r}(\tau^++\tau^-)\) |
@@ -598,22 +595,26 @@ J(\theta;\xi)
 
 ### 10.7 约束审计
 
-逐 (路径,期) 调用主模型 `check_stage`，并额外检查 \(q\in[0,Q^{\max}]\)。
+逐 (路径,期) 做状态/容量审计。由于 s,S 没有 \(q^{in}\)，审计时把
+本期 \(q_t\) 映射到主布局的 q 槽，仅用于生成下一期在途
+\([o_2,q_t]\)；实际状态/日志里 q 槽仍为 0。额外检查
+\(q_t\in[0,Q^{\max}]\) 和 \(I+\sum o+q_t\le I^{\max}\)。
 审计项包括：`pas`、`fleet`、`dem`、`grade0`、`grade`、`N链接`、`结构零`、
 `F_new`、`W守恒`、`send_def`、`tau_*`、`inv`、`pipe*`、`cap`、`q.下`、`q.上`、
 `链.状态`。容差：`tol=1e-6`、`state_tol=1e-4`。
 需求满足、采购恒等式、五项和、状态链、LP 对拍由测试覆盖：
 
 - `ss_static/test/_t_audit.py`：审计、采购恒等式、五项和；
-- `ss_static/test/_t_lp_equiv.py`：固定 q/y 放进主模型 LP，逐项对拍
-  `stage_cost`、状态、五项成本（290 项）；
+- `ss_static/test/_t_timing.py`：新时序自检（无 q_in/q0、q_t 进入在途、
+  容量/成本/审计，425 项）；旧 `_t_lp_equiv.py` 因主模型 q_in 口径
+  不再适用于 s,S 而退役；
 - `ss_static/test/_t_evaluation.py`：评价函数、record/非 record、确定性；
 - `ss_static/test/_t_optimize.py`：8 种算法、可行性、确定性、预算；
 - `ss_static/test/_t_archive.py`：归档、索引、T240 报告元数据、库存单位。
 
 > 报告里的 `terms_vs_stage_cost_max_dev` 是仿真器内部
 > \(\sum_k terms_k=cost\) 的恒等式，恒为 0；真正的 LP 对拍是
-> `_t_lp_equiv.py`，不要把前者当成后者。
+> 旧 `_t_lp_equiv.py` 的 s,S-主模型 LP 对拍口径；新时序已不再适用。
 
 ## 11. 归档与对比验证总结
 
@@ -690,7 +691,7 @@ P="D:/WYJ/Anaconda/Anaconda3/envs/MyRL/python.exe"
 "$P" -B ss_static/test/_t_optimize.py
 "$P" -B ss_static/test/_t_archive.py
 "$P" -B ss_static/test/_t_audit.py
-"$P" -B ss_static/test/_t_lp_equiv.py
+"$P" -B ss_static/test/_t_timing.py
 "$P" -B ss_static/test/_t_pathgen.py
 "$P" -B ss_static/test/_t_baseline.py
 "$P" -B ss_static/test/_t_calibrate.py
@@ -752,7 +753,7 @@ active 键时默认 mode 0。
   \Delta=\min\{E_r,\ D_m,\ \text{源剩余预算},\ \text{目标剩余容量}\},
   \]
   \[
-  \text{目标剩余容量}=I^{\max}_m-X_m-\sum_l o^{out}_{l,m}-q^{out}_m;
+  \text{目标剩余容量}=I^{\max}_m-X_m-\sum_l o^{next}_{l,m};
   \]
   多源对一个目标时维护剩余容量/来源约束台账；
 - 更新净 \(\tau\)，重复直到无盈余/缺口。
@@ -835,18 +836,20 @@ no-active config”矛盾。评估报告从 policy JSON 读取 active options；
 - active 可能增加采购（调出后又补货），必须分五项成本报告；
 - 末期默认停调，避免纯成本。
 
-### 14.6 h 保留下限 + GA 的结果（2026-10-30）
+### 14.6 h 保留下限 + GA 的结果（s,S 新时序，2026-10-30）
 
-- 标定：`results/ss_static/ss_static_T60_204105_active_ga_calib_20261030_102904/`
-  - genetic，`n_unique=1540`，墙钟 727.4 s；
-  - s≈[12,8,20,14.992,7.997]，S≈[12,8,20,15,8]；
-  - h=[12.0, 3.5830, 8.1723, 3.7657, 1.6777]；
-  - train 40,650.1032，val 40,695.5467。
-- 测试（3000 路径）：
-  `results/ss_static/ss_static_T60_204105_active_ga_eval_20261030_104153/`
-  - **40,619.4322 vs 基线 35,833.3228**，+4,786.1094（+13.36%），
-    t=97.62，胜率 1.87%，审计通过；
-  - active vs no-active（二者都用 GA）：**-775.5133（-1.8734%）**，
-    95% CI [-801.7197,-749.3069]，t=-58.00，胜率 89.77%。
-- 旧 active（h-target + coordinate）40,723.1142（+13.65%），
-  active vs no-active -671.83（-1.62%），仅作历史对照。
+- no-active 标定/评估：
+  `..._noactive_ga_noqin_calib_20261030_110033` /
+  `..._noactive_ga_noqin_eval_20261030_110621`；
+  GA，s=S=Imax，train 37,939.0513，val 38,052.8820；
+  测试 **37,950.9220**（+5.91%），t=36.23，审计通过。
+- active 标定/评估：
+  `..._active_ga_noqin_calib_20261030_110608` /
+  `..._active_ga_noqin_eval_20261030_111549`；
+  s≈[11.94,8.00,19.98,15,8]，S=[12,8,20,15,8]，
+  h=[10.609,4.462,12.100,6.150,2.687]；
+  train 37,400.5641，val 37,539.5733；
+  测试 **37,416.4504**（+4.42%），t=25.70，审计通过。
+- active vs no-active：**-534.4716（-1.4083%）**，
+  t=-45.35，胜率 82.57%。
+- 旧 q_in active（+13.36%/+13.65%）与新时序不可混表，仅作历史。
