@@ -446,8 +446,8 @@ def _summary_md(ctx: dict) -> str:
         "- PPO 的被动调拨 y 按 prob.priority/tc_route 的优先级规则（本地优先 + "
         "跨仓全局贪心），不是动作；基线/rolling 的 y 由 LP 优化（成本仍用 "
         "tc_route，但不强制优先级顺序）。策略类不同，差距含履约规则差异。",
-        "- 观测不含 t，PPO 是**时不变（stationary）** state-only 策略，无法表示"
-        "末期 ramp-down；有限视界两端（尤其末 10% 期）的差距含此结构限制。",
+        "- 观测含 t/(T−1)，PPO 是**时间感知**的 state-only 策略；但仍不含未来"
+        " Theta、价值函数或历史，信息集与 SDDP/rolling 不同。",
         "- PPO 没有 q0 状态；基线有初始订单/在途，配对差含首期初始条件差异。",
         "- 动作投影会把 Gaussian 原始动作改成可行动作；投影量见第 7 节，"
         "不能把原始动作当作实际执行量。",
